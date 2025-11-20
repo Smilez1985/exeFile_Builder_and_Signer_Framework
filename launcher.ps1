@@ -1,13 +1,12 @@
 <#
 .SYNOPSIS
-    ExeFile Builder Framework - Master Launcher & Installer
+    ExeFile Builder Framework - Master Launcher (VENV Edition)
     Author: Smilez1985 & Gemini
 .DESCRIPTION
-    Dieses Script übernimmt die vollständige Einrichtung:
-    - Prüft/Installiert Python & Git (Winget oder Direct Download)
-    - Setzt Environment Variablen (PATH)
-    - Aktualisiert das Repo (Git Pull)
-    - Startet die GUI
+    - Prüft/Installiert globales Python & Git (für die Basis)
+    - Erstellt/Nutzt ein lokales Virtual Environment (.venv)
+    - Installiert Dependencies NUR in dieses VENV
+    - Startet die GUI isoliert im VENV
 #>
 
 # -----------------------------------------------------------------------------
@@ -15,7 +14,7 @@
 # -----------------------------------------------------------------------------
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "Warte auf Administrator-Rechte für Installationen..." -ForegroundColor Yellow
+    Write-Host "Warte auf Administrator-Rechte..." -ForegroundColor Yellow
     $processInfo = New-Object System.Diagnostics.ProcessStartInfo
     $processInfo.FileName = "powershell.exe"
     $processInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Definition)`""
@@ -28,17 +27,15 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
     exit
 }
 
-# Execution Policy für diesen Prozess hart setzen (wie angefordert)
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-
 Clear-Host
 Write-Host "#########################################################" -ForegroundColor Cyan
-Write-Host "#       EXE BUILDER FRAMEWORK - LAUNCHER & SETUP        #" -ForegroundColor Cyan
+Write-Host "#    EXE BUILDER - VENV LAUNCHER & SETUP SYSTEM         #" -ForegroundColor Cyan
 Write-Host "#########################################################" -ForegroundColor Cyan
 Write-Host ""
 
 # -----------------------------------------------------------------------------
-# 2. HILFSFUNKTIONEN (Ping Loop etc.)
+# 2. HILFSFUNKTIONEN
 # -----------------------------------------------------------------------------
 function Wait-For-Internet {
     Write-Host "Prüfe Internetverbindung..." -NoNewline
@@ -49,132 +46,99 @@ function Wait-For-Internet {
     Write-Host " OK." -ForegroundColor Green
 }
 
-function Install-Python-Web {
-    Write-Host "Lade Python Installer herunter (Fallback)..." -ForegroundColor Yellow
-    Wait-For-Internet
-    $url = "https://www.python.org/ftp/python/3.11.5/python-3.11.5-amd64.exe"
-    $output = "$env:TEMP\python_installer.exe"
-    
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $output
-        Write-Host "Installiere Python (Silent)... Das dauert kurz." -ForegroundColor Cyan
-        # Silent Install für alle User, PATH hinzufügen
-        $args = "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0"
-        Start-Process -FilePath $output -ArgumentList $args -Wait
-        Write-Host "Python Installation abgeschlossen." -ForegroundColor Green
-    } catch {
-        Write-Error "Download fehlgeschlagen: $_"
-        exit 1
-    }
-}
-
-function Install-Git-Web {
-    Write-Host "Lade Git Installer herunter (Fallback)..." -ForegroundColor Yellow
-    Wait-For-Internet
-    $url = "https://github.com/git-for-windows/git/releases/download/v2.42.0.windows.2/Git-2.42.0.2-64-bit.exe"
-    $output = "$env:TEMP\git_installer.exe"
-    
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $output
-        Write-Host "Installiere Git (Silent)..." -ForegroundColor Cyan
-        # Silent Install Parameters
-        Start-Process -FilePath $output -ArgumentList "/VERYSILENT /NORESTART" -Wait
-        Write-Host "Git Installation abgeschlossen." -ForegroundColor Green
-    } catch {
-        Write-Error "Download fehlgeschlagen: $_"
-    }
-}
-
-function Check-And-Install-Python {
+function Check-And-Install-Global-Python {
+    # Wir brauchen ein globales Python nur, um das VENV zu erstellen
     if (Get-Command "python" -ErrorAction SilentlyContinue) {
-        Write-Host "✅ Python ist installiert." -ForegroundColor Green
+        Write-Host "✅ Globales Python gefunden (Systembasis)." -ForegroundColor Green
     } else {
-        Write-Host "❌ Python fehlt. Starte Installation..." -ForegroundColor Red
+        Write-Host "❌ Python fehlt. Starte Download & Installation..." -ForegroundColor Red
         Wait-For-Internet
         
-        # Versuch 1: Winget
+        # Web Installer Fallback (zuverlässiger als Winget bei PATH Problemen)
+        $url = "https://www.python.org/ftp/python/3.11.5/python-3.11.5-amd64.exe"
+        $output = "$env:TEMP\python_installer.exe"
         try {
-            Write-Host "Versuche Installation via Winget..."
-            winget install -e --id Python.Python.3.11 --scope machine --accept-package-agreements --accept-source-agreements
+            Invoke-WebRequest -Uri $url -OutFile $output
+            Start-Process -FilePath $output -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_test=0" -Wait
+            Write-Host "Python installiert." -ForegroundColor Green
         } catch {
-            Write-Warning "Winget fehlgeschlagen."
-        }
-
-        # Check ob es geklappt hat, sonst Web Installer
-        # Wir müssen den Pfad refreshen
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        
-        if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
-            Install-Python-Web
-        }
-        
-        # Finaler Check
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
-            Write-Error "Konnte Python nicht installieren. Bitte manuell prüfen."
+            Write-Error "Installation fehlgeschlagen: $_"
             Pause
             exit 1
         }
+        # Path Refresh für aktuelle Session
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
     }
 }
 
 function Check-And-Install-Git {
-    if (Get-Command "git" -ErrorAction SilentlyContinue) {
-        Write-Host "✅ Git ist installiert." -ForegroundColor Green
-    } else {
-        Write-Host "❌ Git fehlt. Starte Installation..." -ForegroundColor Red
+    if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
+        Write-Host "❌ Git fehlt. Installiere..." -ForegroundColor Red
         Wait-For-Internet
-        
         try {
             winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
         } catch {
-            Install-Git-Web
+            Write-Warning "Winget fehlgeschlagen, bitte Git manuell installieren."
         }
-        
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    } else {
+        Write-Host "✅ Git gefunden." -ForegroundColor Green
     }
 }
 
 # -----------------------------------------------------------------------------
-# 3. LOGIK ABLAUF
+# 3. VENV LOGIK (Der Kern)
 # -----------------------------------------------------------------------------
 
-# A) Dependencies prüfen
-Check-And-Install-Python
+# A) Basis-Checks
+Check-And-Install-Global-Python
 Check-And-Install-Git
 
-# B) Repo Update (Git Pull)
+# B) Repo Update
 if (Test-Path ".git") {
     Write-Host "Prüfe auf Updates (git pull)..." -ForegroundColor Cyan
-    Wait-For-Internet
-    try {
-        git pull
-    } catch {
-        Write-Warning "Git Pull fehlgeschlagen (Evtl. Konflikte oder kein Netz). Fahre fort..."
+    try { git pull } catch { Write-Warning "Git Pull nicht möglich (Offline?)." }
+}
+
+# C) VENV Einrichtung
+$VenvPath = "$PSScriptRoot\.venv"
+$VenvPython = "$VenvPath\Scripts\python.exe"
+$VenvPip = "$VenvPath\Scripts\pip.exe"
+
+Write-Host "Prüfe Virtual Environment (.venv)..." -ForegroundColor Cyan
+
+if (-not (Test-Path $VenvPython)) {
+    Write-Host "🔨 Erstelle neues VENV in $VenvPath..." -ForegroundColor Yellow
+    python -m venv .venv
+    
+    if (-not (Test-Path $VenvPython)) {
+        Write-Error "VENV Erstellung fehlgeschlagen!"
+        Pause
+        exit 1
     }
-}
-
-# C) System-weite Verfügbarkeit (PATH setzen)
-$currentPath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
-$scriptPath = $PSScriptRoot
-
-if ($currentPath -notlike "*$scriptPath*") {
-    Write-Host "Füge Framework zum System-PATH hinzu..." -ForegroundColor Yellow
-    $newPath = $currentPath + ";" + $scriptPath
-    [System.Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    Write-Host "✅ CLI ist nun systemweit verfügbar (als 'python main.py' im Ordner)." -ForegroundColor Green
+    Write-Host "✅ VENV erstellt." -ForegroundColor Green
 } else {
-    Write-Host "✅ Framework ist bereits im System-PATH." -ForegroundColor Green
+    Write-Host "✅ VENV bereits vorhanden." -ForegroundColor Green
 }
 
-# D) Dependencies installieren (Pip)
-# Wir lassen pip laufen, um sicherzugehen, dass alles da ist
-Write-Host "Prüfe Python Pakete..." -ForegroundColor Cyan
-Wait-For-Internet
-python -m pip install -r Requirements.txt
+# D) Dependencies im VENV installieren
+# Wir nutzen direkt den VENV-Pfad, das ist sicherer als 'activate'
+Write-Host "Synchronisiere Dependencies im VENV..." -ForegroundColor Cyan
+if (Test-Path "Requirements.txt") {
+    # Ping Loop nur wenn nötig (einfacher Check)
+    & $VenvPython -m pip install -r Requirements.txt
+}
 
 # E) Starten
-Write-Host "🚀 Starte GUI..." -ForegroundColor Green
+Write-Host "🚀 Starte GUI im VENV Modus..." -ForegroundColor Green
+Write-Host "---------------------------------------------------------"
 Start-Sleep -Seconds 1
-python main_gui.py
+
+# Der entscheidende Aufruf: Wir starten das Script mit DEM VENV PYTHON
+& $VenvPython main_gui.py
+
+# Falls das Script crasht, Fenster offen lassen
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Das Programm wurde mit Fehler beendet." -ForegroundColor Red
+    Pause
+}
