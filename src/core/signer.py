@@ -1,83 +1,70 @@
 import subprocess
+import shutil
+import os
 from pathlib import Path
 from src.utils.helpers import log
 
 class AuthenticodeSigner:
-    """Signiert Executables mit einem PFX Zertifikat via PowerShell."""
+    """
+    Signiert Executables mit osslsigncode (Binary).
+    Vermeidet PowerShell-Probleme komplett.
+    """
+
+    def __init__(self):
+        # Wir suchen das Tool im 'tools' Ordner relativ zum Framework Root
+        # Root ist src/core/../../ -> 
+        self.root_dir = Path(__file__).parent.parent.parent
+        self.tool_path = self.root_dir / "tools" / "osslsigncode.exe"
 
     def sign_exe(self, exe_path: Path, pfx_path: Path, password: str) -> bool:
-        log.info(f"Signiere {exe_path.name} mit {pfx_path.name}...")
+        log.info(f"Signiere {exe_path.name} mit {pfx_path.name} via osslsigncode...")
         
+        if not self.tool_path.exists():
+            log.error(f"Signier-Tool nicht gefunden: {self.tool_path}")
+            log.info("Bitte Neustart versuchen (Environment Check lädt es nach).")
+            return False
+
         timestamp_server = "http://timestamp.digicert.com"
-        
-        # PowerShell Script: "Aggressive Mode"
-        # 1. Modul rauswerfen (falls halb geladen)
-        # 2. Modul neu laden (mit Gewalt)
-        # 3. Fehler beim Laden ignorieren (da das Cmdlet oft trotzdem geht)
-        ps_script = f"""
-        $OutputEncoding = [System.Text.Encoding]::UTF8
-        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-        $ErrorActionPreference = 'Stop'
-        
-        try {{
-            # SCHRITT 1: Modul Reset
-            # Wir versuchen, das Modul zu entfernen, um einen sauberen State zu haben.
-            Remove-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue
-            
-            # SCHRITT 2: Import erzwingen
-            # Wir nutzen 'try-catch', um den nervigen "TypeData already exists"-Fehler zu verschlucken.
-            # Der verhindert nämlich sonst, dass das Skript weiterläuft.
-            try {{
-                Import-Module Microsoft.PowerShell.Security -Force -ErrorAction Stop
-            }} catch {{
-                # Fehler ignorieren - wir prüfen gleich, ob der Befehl da ist.
-            }}
+        signed_exe_path = exe_path.parent / f"{exe_path.stem}_signed.exe"
 
-            # SCHRITT 3: Prüfen ob es geklappt hat
-            if (-not (Get-Command ConvertTo-SecureString -ErrorAction SilentlyContinue)) {{
-                # Letzter Versuch ohne Import (manchmal ist es Core-Locked)
-            }}
-
-            $pwd = ConvertTo-SecureString -String "{password}" -Force -AsPlainText
-            $cert = Get-PfxCertificate -FilePath "{pfx_path.absolute()}" -Password $pwd
-            
-            $sig = Set-AuthenticodeSignature -FilePath "{exe_path.absolute()}" -Certificate $cert -TimestampServer "{timestamp_server}"
-            
-            if ($sig.Status -eq 'Valid') {{
-                Write-Output "SIGNATURE_VALID"
-            }} else {{
-                Write-Output "SIGNATURE_INVALID"
-                Write-Output $sig.StatusMessage
-            }}
-        }} catch {{
-            Write-Error $_
-        }}
-        """
+        # Befehl aufbauen:
+        # osslsigncode sign -pkcs12 <pfx> -pass <pwd> -n <name> -t <ts> -in <in> -out <out>
+        cmd = [
+            str(self.tool_path), "sign",
+            "-pkcs12", str(pfx_path),
+            "-pass", password,
+            "-n", exe_path.stem,
+            "-t", timestamp_server,
+            "-in", str(exe_path),
+            "-out", str(signed_exe_path)
+        ]
 
         try:
-            # Hier setzen wir den Bypass für diesen Prozess
+            # Ausführen ohne Shell (sicherer, kein Encoding Problem)
             result = subprocess.run(
-                ["powershell", "-ExecutionPolicy", "Bypass", "-NoProfile", "-Command", ps_script],
+                cmd,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
-                errors='replace',
-                check=True
+                errors='replace'
             )
-            
-            output = result.stdout.strip()
-            if "SIGNATURE_VALID" in output:
-                log.success(f"Signatur erfolgreich: {exe_path.name}")
+
+            if result.returncode == 0 and signed_exe_path.exists():
+                # Erfolg! Wir ersetzen das Original mit der signierten Version
+                log.success("Signatur erfolgreich erstellt.")
+                
+                # Original löschen / Backup machen? Wir überschreiben hart für "OneFile" Feeling
+                os.remove(exe_path)
+                shutil.move(signed_exe_path, exe_path)
+                
+                log.success(f"Datei signiert und bereit: {exe_path.name}")
                 return True
             else:
-                log.warning(f"Signatur-Status unklar oder fehlgeschlagen: {output}")
-                log.debug(f"Full Output: {output}")
+                log.error("Signierung fehlgeschlagen.")
+                log.debug(f"Tool Output: {result.stdout}")
+                log.debug(f"Tool Error: {result.stderr}")
                 return False
 
-        except subprocess.CalledProcessError as e:
-            err_msg = e.stderr if e.stderr else "Unbekannter PowerShell Fehler"
-            log.error(f"Fehler beim Signieren via PowerShell: {err_msg}")
-            return False
         except Exception as e:
-            log.error(f"Allgemeiner Fehler im Signer: {e}")
+            log.error(f"Fehler beim Ausführen von osslsigncode: {e}")
             return False
