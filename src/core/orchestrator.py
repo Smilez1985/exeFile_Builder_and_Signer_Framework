@@ -30,18 +30,12 @@ class BuildOrchestrator:
         password = config.get("cert_password", "")
         
         if mode == "file":
-            # Bei externer PFX müssen wir schauen, ob wir den Public Key extrahieren können
-            # oder ob der User ihn bereitstellt.
-            # Vereinfachung: Wir nehmen an, pfx ist da. CER Generierung wäre hier komplexer ohne OpenSSL.
-            # Fallback: Wir geben nur PFX zurück, User muss CER selbst haben.
             pfx_path = Path(config.get("pfx_path"))
             if not pfx_path.exists():
                 raise FileNotFoundError(f"PFX nicht gefunden: {pfx_path}")
             
-            # Wir versuchen, eine .cer neben der .pfx zu finden
             cer_path = pfx_path.with_suffix(".cer")
             if not cer_path.exists():
-                # Wenn keine CER da ist, erstellen wir keine Install-Bat (oder warnen)
                 log.warning("Bei externer PFX wurde keine .cer Datei gefunden. Auto-Install Script wird evtl. nicht funktionieren.")
                 return pfx_path, None
                 
@@ -51,17 +45,49 @@ class BuildOrchestrator:
             use_openssl = config.get("use_openssl", False)
             
             # 1. Suche im Store
-            # Wir müssen checken, ob PFX UND CER da sind
             pfx_path = self.cert_manager.store_path / f"{name}.pfx"
-            cer_path = self.cert_manager.store_path / f"{name}.cer" # Windows macht oft .cer
+            cer_path = self.cert_manager.store_path / f"{name}.cer"
 
             if pfx_path.exists() and cer_path.exists():
                 log.info(f"♻️ Nutze Cache Zertifikat: {name}")
                 return pfx_path, cer_path
             
             log.info(f"✨ Erstelle neues Zertifikat: {name}")
-            # Create liefert (pfx, cer) zurück
             return self.cert_manager.create_certificate(name, password, use_openssl=use_openssl)
+
+    def create_readme(self, output_dir: Path):
+        """Erstellt eine DAU-freundliche Anleitung für den Empfänger."""
+        readme_path = output_dir / "ANLEITUNG_LESEN.txt"
+        content = """========================================================================
+             WICHTIGE INSTALLATIONS-HINWEISE
+========================================================================
+
+Damit dieses Programm auf Ihrem Computer ohne Warnmeldungen läuft, 
+muss einmalig das beiliegende Sicherheitszertifikat installiert werden.
+
+SCHRITT 1: ZERTIFIKAT INSTALLIEREN
+----------------------------------
+1. Finden Sie in diesem Ordner die Datei "install_cert.bat".
+2. Klicken Sie mit der RECHTEN Maustaste darauf.
+3. Wählen Sie "Als Administrator ausführen".
+4. Bestätigen Sie eventuelle Fenster mit "Ja" oder "OK".
+
+-> Es erscheint kurz ein schwarzes Fenster, das den Erfolg bestätigt.
+
+
+SCHRITT 2: PROGRAMM STARTEN
+---------------------------
+Jetzt können Sie das Programm (die .exe Datei mit dem Icon) 
+ganz normal mit einem Doppelklick starten.
+
+Viel Spaß!
+"""
+        try:
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            log.info(f"   -> Anleitung erstellt: {readme_path.name}")
+        except Exception as e:
+            log.warning(f"Konnte Anleitung nicht erstellen: {e}")
 
     def run_full_pipeline(self, config: dict):
         log.info("=== STARTING BUILD PIPELINE ===")
@@ -73,7 +99,7 @@ class BuildOrchestrator:
 
         self.setup_environment(Path("."))
 
-        # 1. Zertifikat holen (PFX + CER)
+        # 1. Zertifikat
         try:
             pfx_path, cer_path = self.get_cert_tuple(config)
             cert_pass = config.get("cert_password", "")
@@ -81,7 +107,7 @@ class BuildOrchestrator:
             log.error(f"Zertifikats-Fehler: {e}")
             return
 
-        # 2. Assets vorbereiten
+        # 2. Assets
         raw_assets = config.get("assets", [])
         formatted_assets = []
         for asset in raw_assets:
@@ -111,12 +137,12 @@ class BuildOrchestrator:
         success = self.signer.sign_exe(exe_path, pfx_path, cert_pass)
         
         if success:
-            # --- FINALISIERUNG: Das Distributions-Paket schnüren ---
-            dist_dir = exe_path.parent # Das ist builds/dist/
+            # --- DISTRIBUTION ---
+            dist_dir = exe_path.parent
             
             log.info("📦 Erstelle Distributions-Paket...")
             
-            # A) CER Datei kopieren (damit der Kunde sie hat)
+            # A) CER kopieren
             final_cer_path = None
             if cer_path and cer_path.exists():
                 try:
@@ -126,17 +152,21 @@ class BuildOrchestrator:
                 except Exception as e:
                     log.warning(f"Konnte CER nicht kopieren: {e}")
 
-            # B) Install-Script direkt beim Endprodukt erstellen
+            # B) Install-Script erstellen
             if final_cer_path:
                 self.cert_manager.create_install_script(dist_dir, pfx_path.stem, final_cer_path)
                 log.info(f"   -> Installer Script erstellt in: {dist_dir}")
+            
+            # C) Anleitung erstellen (NEU)
+            self.create_readme(dist_dir)
 
             log.success("✅ DONE!")
             print(f"\n[DISTRIBUTION - DIESEN ORDNER WEITERGEBEN]")
             print(f" 📂 {dist_dir.absolute()}")
-            print(f"     ├── {exe_path.name} (Deine App)")
+            print(f"     ├── {exe_path.name}")
             if final_cer_path:
-                print(f"     ├── {final_cer_path.name} (Schlüssel)")
-                print(f"     └── install_cert.bat (Für den Kunden)")
+                print(f"     ├── {final_cer_path.name}")
+                print(f"     ├── install_cert.bat")
+                print(f"     └── ANLEITUNG_LESEN.txt")
         else:
             log.error("❌ Signatur fehlgeschlagen.")
