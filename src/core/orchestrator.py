@@ -1,8 +1,8 @@
 from pathlib import Path
 import sys
 
-# Importiere Module - Pfade basierend auf der Repo-Struktur
-from core.environment import EnvironmentManager
+# Importiere Module - Alle Pfade explizit via 'src.'
+from src.core.environment import EnvironmentManager
 from src.core.certs import CertificateManager
 from src.core.signer import AuthenticodeSigner
 from src.core.builder import PyBuilder
