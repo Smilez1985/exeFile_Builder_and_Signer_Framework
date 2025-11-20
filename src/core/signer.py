@@ -11,19 +11,15 @@ class AuthenticodeSigner:
         timestamp_server = "http://timestamp.digicert.com"
         
         # PowerShell Script:
-        # 1. Erzwingt UTF-8 Output
-        # 2. Lädt explizit das Security Modul (falls es klemmt)
-        # 3. Führt die Signierung durch
+        # Wir verlassen uns auf Autoloading der Module, da wir Bypass nutzen.
         ps_script = f"""
         $OutputEncoding = [System.Text.Encoding]::UTF8
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         $ErrorActionPreference = 'Stop'
         
         try {{
-            # Modul laden erzwingen, falls Policy es blockiert hat
-            if (-not (Get-Module -Name Microsoft.PowerShell.Security)) {{
-                Import-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue
-            }}
+            # WICHTIG: Kein manuelles Import-Module mehr!
+            # Durch -ExecutionPolicy Bypass lädt PowerShell das Nötige selbst.
 
             $pwd = ConvertTo-SecureString -String "{password}" -Force -AsPlainText
             $cert = Get-PfxCertificate -FilePath "{pfx_path.absolute()}" -Password $pwd
@@ -42,14 +38,13 @@ class AuthenticodeSigner:
         """
 
         try:
-            # WICHTIG: Wir rufen PowerShell mit "-ExecutionPolicy Bypass" auf!
-            # Das erlaubt das Laden von Modulen auch im Subprozess.
+            # Wir behalten "-ExecutionPolicy Bypass", um Rechteprobleme zu lösen
             result = subprocess.run(
                 ["powershell", "-ExecutionPolicy", "Bypass", "-NoProfile", "-Command", ps_script],
                 capture_output=True,
                 text=True,
-                encoding='utf-8',       # Zwingend UTF-8 lesen
-                errors='replace',       # Bei Encoding-Fehlern nicht abstürzen, sondern Zeichen ersetzen
+                encoding='utf-8',
+                errors='replace',
                 check=True
             )
             
@@ -63,7 +58,6 @@ class AuthenticodeSigner:
                 return False
 
         except subprocess.CalledProcessError as e:
-            # Fehler sicher abfangen und loggen
             err_msg = e.stderr if e.stderr else "Unbekannter PowerShell Fehler"
             log.error(f"Fehler beim Signieren via PowerShell: {err_msg}")
             return False
