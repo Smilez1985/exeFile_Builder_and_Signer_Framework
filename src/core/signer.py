@@ -23,9 +23,12 @@ class AuthenticodeSigner:
 
         timestamp_server = "http://timestamp.digicert.com"
         
-        # WICHTIG: Absolute Pfade nutzen, da wir das CWD (Arbeitsverzeichnis) ändern!
+        # FIX: Pfade in ABSOLUTE Pfade umwandeln (.resolve())
+        # Das verhindert Probleme, wenn wir das Arbeitsverzeichnis wechseln.
         abs_exe_path = exe_path.resolve()
         abs_pfx_path = pfx_path.resolve()
+        
+        # Der Output-Name (Signierte Datei)
         abs_signed_path = abs_exe_path.parent / f"{abs_exe_path.stem}_signed.exe"
 
         # Befehl aufbauen
@@ -39,29 +42,27 @@ class AuthenticodeSigner:
             "-out", str(abs_signed_path)
         ]
         
-        # FIX: Environment vorbereiten
-        # Wir müssen OpenSSL sagen, wo die Module (legacy.dll) liegen.
-        # Unser environment.py hat sie alle flach in den 'tools' Ordner entpackt.
+        # Environment vorbereiten (für OpenSSL Module)
         env = os.environ.copy()
         tools_dir_str = str(self.tool_path.parent.resolve())
         env["OPENSSL_MODULES"] = tools_dir_str
 
         try:
-            # Ausführen
+            # Ausführen im 'tools' Ordner, aber mit absoluten Pfaden zu den Dateien
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                cwd=tools_dir_str, # CWD ändern, damit Haupt-DLLs (libcrypto) gefunden werden
-                env=env            # ENV setzen, damit Module (legacy.dll) gefunden werden
+                cwd=tools_dir_str, # Wichtig für DLLs
+                env=env            # Wichtig für legacy.dll
             )
 
             if result.returncode == 0 and abs_signed_path.exists():
                 log.success("Signatur erfolgreich erstellt.")
                 
-                # Original überschreiben
+                # Original überschreiben (OneFile Feeling)
                 if abs_exe_path.exists():
                     os.remove(abs_exe_path)
                 shutil.move(abs_signed_path, abs_exe_path)
