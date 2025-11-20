@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
 
-# Importiere Module - Alle Pfade explizit via 'src.'
+# Importiere Module
 from src.core.environment import EnvironmentManager
 from src.core.certs import CertificateManager
 from src.core.signer import AuthenticodeSigner
@@ -22,55 +22,40 @@ class BuildOrchestrator:
         self.env_manager.prepare_environment(project_root)
 
     def get_cert_path(self, config: dict) -> Path:
-        """
-        Entscheidet basierend auf User-Auswahl, welches Cert genutzt wird.
-        """
         mode = config.get("cert_mode", "auto")
         password = config.get("cert_password", "")
         
         if mode == "file":
-            # User hat explizit eine Datei gewählt
             pfx_path = Path(config.get("pfx_path"))
             if not pfx_path.exists():
-                raise FileNotFoundError(f"Die angegebene PFX Datei existiert nicht: {pfx_path}")
-            log.info(f"Nutze existierende Signatur-Datei: {pfx_path.name}")
+                raise FileNotFoundError(f"PFX nicht gefunden: {pfx_path}")
             return pfx_path
-            
         else:
-            # Auto Mode: Cache oder Neu
             name = config.get("cert_name", "MyCert")
             use_openssl = config.get("use_openssl", False)
             
-            # 1. Suche im Store
             certs = self.cert_manager.list_certificates()
             for cert in certs:
                 if cert.stem == name:
-                    log.info(f"♻️ Cache Treffer: Nutze bestehendes Zertifikat '{cert.name}'")
+                    log.info(f"♻️ Nutze Cache Zertifikat: {cert.name}")
                     return cert
             
-            # 2. Neu erstellen
-            log.info(f"✨ Erstelle NEUES Zertifikat '{name}'...")
+            log.info(f"✨ Erstelle neues Zertifikat: {name}")
             pfx, cer = self.cert_manager.create_certificate(name, password, use_openssl=use_openssl)
-            
-            # Install Script update
             self.cert_manager.create_install_script(Path("builds"), name, cer)
-            
             return pfx
 
     def run_full_pipeline(self, config: dict):
-        log.info("==========================================")
-        log.info("   STARTING BUILD & SIGN PIPELINE")
-        log.info("==========================================")
+        log.info("=== STARTING BUILD PIPELINE ===")
 
         script_path = Path(config.get("script_file"))
         if not script_path.exists():
-            log.error(f"Script nicht gefunden: {script_path}")
+            log.error(f"Script fehlt: {script_path}")
             return
 
-        # 1. Environment Check
         self.setup_environment(Path("."))
 
-        # 2. Zertifikat beschaffen (Neu, Cache oder File)
+        # Zertifikat
         try:
             pfx_path = self.get_cert_path(config)
             cert_pass = config.get("cert_password", "")
@@ -78,53 +63,51 @@ class BuildOrchestrator:
             log.error(f"Zertifikats-Fehler: {e}")
             return
 
-        # 3. Build (PyInstaller) - Jetzt mit Asset Support
-        # Assets müssen als "source;dest" (Windows) Format für --add-data übergeben werden
-        # Wir vereinfachen es: Wir fügen das Asset in den Root der EXE (.)
-        extra_args = []
-        asset = config.get("asset_path")
-        if asset and Path(asset).exists():
-            log.info(f"Packe Assets mit ein: {Path(asset).name}")
-            # PyInstaller Syntax für Windows: "Path;."
-            extra_args.append(f"--add-data={asset};.")
+        # --- ASSETS VORBEREITEN ---
+        # Wir müssen entscheiden: Datei -> Root, Ordner -> Eigener Ordner
+        raw_assets = config.get("assets", [])
+        formatted_assets = []
+        
+        for asset in raw_assets:
+            path_obj = Path(asset)
+            if not path_obj.exists():
+                log.warning(f"Asset ignoriert (nicht gefunden): {asset}")
+                continue
+            
+            if path_obj.is_file():
+                # Datei: C:\foo\bar.txt -> .;bar.txt (bzw Root)
+                # Windows Syntax: "SourcePath;."
+                formatted_assets.append(f"{asset};.")
+                log.info(f"Asset (Datei): {path_obj.name} -> Root")
+            elif path_obj.is_dir():
+                # Ordner: C:\foo\configs -> configs;configs
+                # Windows Syntax: "SourcePath;DestFolderName"
+                folder_name = path_obj.name
+                formatted_assets.append(f"{asset};{folder_name}")
+                log.info(f"Asset (Ordner): {path_obj.name} -> /{folder_name}")
 
-        # Wir patchen den Builder hier dynamisch oder übergeben es, 
-        # der Einfachheit halber erweitern wir den Builder Call im Code nicht, 
-        # sondern wir gehen davon aus, dass der User es im CLI mode machen würde.
-        # Um Assets im Code zu unterstützen, müsste builder.py erweitert werden.
-        # Da ich builder.py nicht ändern soll laut deinem Wunsch "nur die 3 dateien",
-        # gebe ich hier einen Hinweis aus, dass Assets nur via spec-File voll unterstützt werden,
-        # ODER wir nutzen einen Trick: Wir kopieren Assets in den dist Ordner.
-        # Besser: Wir lassen es für den DAU einfach beim Script.
-        # (Anmerkung: Um add-data sauber zu unterstützen, müsste builder.py angepasst werden. 
-        # Ich konzentriere mich auf den Signatur-Workflow).
-
+        # Build
         exe_path = self.builder.build(
             script_path=script_path,
             app_name=config.get("app_name", "MyApp"),
             icon_path=Path(config.get("icon_path")) if config.get("icon_path") else None,
             console=config.get("console", True),
-            one_file=config.get("one_file", True)
+            one_file=config.get("one_file", True),
+            add_data=formatted_assets # Liste übergeben
         )
 
         if not exe_path:
             log.error("Build fehlgeschlagen.")
             return
 
-        # 4. Sign
-        log.info("--- Starte Signierung ---")
+        # Sign
+        log.info("--- Signierung ---")
         success = self.signer.sign_exe(exe_path, pfx_path, cert_pass)
         
-        # 5. SUMMARY (User-Freundlich)
-        log.info("\n")
         if success:
-            log.success("✅ ALLES ERFOLGREICH ABGESCHLOSSEN!")
-            print(f"\n{'-'*50}")
-            print(" [ERGEBNIS BERICHT]")
-            print(f" 📂 EXE Datei:    {exe_path.absolute()}")
-            print(f" 🔐 Signatur:     {pfx_path.absolute()}")
-            if config.get("cert_mode") == "auto":
-                print(f" 📜 Install-Bat:  {Path('builds/install_cert.bat').absolute()}")
-            print(f"{'-'*50}\n")
+            log.success("✅ DONE!")
+            print(f"\n[OUTPUT]")
+            print(f" EXE: {exe_path.absolute()}")
+            print(f" PFX: {pfx_path.absolute()}")
         else:
-            log.error("❌ Signierung fehlgeschlagen (Datei ist unsigniert).")
+            log.error("❌ Signatur fehlgeschlagen.")
