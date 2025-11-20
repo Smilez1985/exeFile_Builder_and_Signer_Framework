@@ -57,8 +57,6 @@ class EnvironmentManager:
                 log.info("Starte Download & Installation von OpenSSL...")
                 try:
                     # Winget Silent Install via PowerShell
-                    # Wir nutzen 'ShiningLight.OpenSSL' oder 'Git.Git' (da ist openssl drin). 
-                    # ShiningLight ist direkter.
                     cmd = [
                         "powershell", "-Command",
                         "winget install -e --id ShiningLight.OpenSSL --accept-source-agreements --accept-package-agreements --silent"
@@ -67,8 +65,7 @@ class EnvironmentManager:
                     
                     log.info("Installation angestoßen. Prüfe erneut...")
                     
-                    # Reload Path für den aktuellen Prozess schwierig, oft Neustart nötig.
-                    # Wir prüfen zumindest, ob der Standardpfad existiert
+                    # Reload Path Check
                     possible_paths = [
                         Path(r"C:\Program Files\OpenSSL-Win64\bin\openssl.exe"),
                         Path(r"C:\Program Files\OpenSSL\bin\openssl.exe")
@@ -77,19 +74,17 @@ class EnvironmentManager:
                     for p in possible_paths:
                         if p.exists():
                             log.success(f"OpenSSL gefunden unter: {p}")
-                            # Zum PATH hinzufügen für diese Session
                             import os
                             os.environ["PATH"] += os.pathsep + str(p.parent)
                             found = True
                             break
                     
                     if not found and not shutil.which("openssl"):
-                        log.warning("OpenSSL installiert, aber noch nicht im PATH. Bitte Shell neu starten oder Pfad prüfen.")
-                        break # Brechen Loop ab, User muss ggf. eingreifen
+                        log.warning("OpenSSL installiert, aber noch nicht im PATH. Ggf. Neustart erforderlich.")
+                        break 
                         
                 except subprocess.CalledProcessError as e:
                     log.error(f"Installation fehlgeschlagen: {e}")
-                    log.info("Warte 10 Sekunden vor nächstem Versuch...")
                     import time
                     time.sleep(10)
         else:
@@ -145,9 +140,8 @@ class EnvironmentManager:
 
     def _install_poetry(self, project_path: Path):
         log.info("Poetry Projekt erkannt.")
-        # Check Poetry Existenz
         if not shutil.which("poetry"):
-            log.error("Poetry fehlt! Bitte manuell installieren (pip install poetry).")
+            log.error("Poetry fehlt! Bitte manuell installieren.")
             return
 
         self.network.wait_for_network()
