@@ -12,8 +12,7 @@
    - WICHTIG: Setze bei der Installation den Haken bei "Add Python to PATH".
 
 2. Programm starten
-   - Doppelklicke auf die Datei "start_gui.bat" (falls erstellt)
-   - ODER öffne eine Konsole/PowerShell in diesem Ordner und tippe:
+   - Öffne eine Konsole/PowerShell in diesem Ordner und tippe:
      python main_gui.py
 
    -> HINWEIS: Beim allerersten Start prüft das Programm, ob alle Bauteile 
@@ -59,8 +58,7 @@ Befehl: python main.py
 
 1. Folge den Anweisungen im Text-Menü.
 2. Wenn du nach dem Icon gefragt wirst:
-   - Ziehe die .ico Datei einfach in das Terminal-Fenster.
-   - Der Pfad wird eingefügt. Drücke Enter.
+   - Gib den Pfad manuell ein oder zieh die Datei ins Terminal.
 
 --------------------------------------------------------------------------------
  KAPITEL 4: FERTIGSTELLUNG & SIGNATUR
