@@ -5,6 +5,7 @@ import importlib.util
 import pkg_resources
 import zipfile
 import io
+import os
 import requests
 from pathlib import Path
 from src.utils.helpers import log
@@ -39,20 +40,18 @@ class EnvironmentManager:
             self._install_pip(project_path / "Requirements.txt")
 
     def _ensure_osslsigncode(self):
-        """Lädt osslsigncode herunter, falls es fehlt."""
+        """Lädt osslsigncode und ALLE Abhängigkeiten (DLLs) herunter."""
         exe_path = self.tools_dir / "osslsigncode.exe"
-        if exe_path.exists():
-            # Kurzer Test, ob die Datei auch ausführbar/gültig ist (Größe > 0)
-            if exe_path.stat().st_size > 0:
-                log.debug("Signier-Tool (osslsigncode) ist bereit.")
-                return
-            else:
-                log.warning("Signier-Tool ist beschädigt (0 Byte). Lade neu...")
+        
+        # Check: Existiert die Exe und ist sie größer als 0 Byte?
+        if exe_path.exists() and exe_path.stat().st_size > 0:
+            log.debug("Signier-Tool (osslsigncode) scheint vorhanden zu sein.")
+            return
 
-        log.warning("Signier-Tool (osslsigncode) fehlt. Starte Download...")
+        log.warning("Signier-Tool (osslsigncode) fehlt oder ist beschädigt. Starte Download...")
         self.network.wait_for_network()
 
-        # NEUER LINK (Offizielles Repo, Version 2.10)
+        # Offizieller Link zu Release 2.10 (MinGW Build mit DLLs)
         url = "https://github.com/mtrojnar/osslsigncode/releases/download/2.10/osslsigncode-2.10-windows-x64-mingw.zip"
         
         try:
@@ -60,25 +59,37 @@ class EnvironmentManager:
             r = requests.get(url)
             r.raise_for_status()
             
-            log.info("Entpacke Tool...")
-            found = False
-            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-                # Wir suchen die .exe im Zip (egal in welchem Unterordner)
-                for file in z.namelist():
-                    if file.endswith("osslsigncode.exe"):
-                        with z.open(file) as source, open(exe_path, "wb") as target:
-                            shutil.copyfileobj(source, target)
-                        found = True
-                        break
+            log.info("Entpacke Tool und DLLs...")
+            found_exe = False
             
-            if found and exe_path.exists():
-                log.success(f"Signier-Tool installiert: {exe_path}")
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                for file_info in z.infolist():
+                    # Wir ignorieren Ordner, wir wollen die Dateien direkt in 'tools/' haben (Flatten)
+                    if file_info.is_dir():
+                        continue
+                        
+                    filename = os.path.basename(file_info.filename)
+                    if not filename:
+                        continue
+                    
+                    # Wir brauchen die .exe UND alle .dll Dateien (Abhängigkeiten)
+                    if filename.lower().endswith(('.exe', '.dll')):
+                        target_path = self.tools_dir / filename
+                        with z.open(file_info) as source, open(target_path, "wb") as target:
+                            shutil.copyfileobj(source, target)
+                        
+                        if filename == "osslsigncode.exe":
+                            found_exe = True
+                            log.debug(f"Entpackt: {filename}")
+
+            if found_exe and exe_path.exists():
+                log.success(f"Signier-Tool installiert in: {self.tools_dir}")
             else:
-                raise FileNotFoundError("osslsigncode.exe nicht im Zip gefunden")
+                raise FileNotFoundError("osslsigncode.exe war nicht im ZIP enthalten!")
                 
         except Exception as e:
-            log.error(f"Download von osslsigncode fehlgeschlagen: {e}")
-            # Wir löschen die kaputte Datei, damit beim nächsten Start ein neuer Versuch unternommen wird
+            log.error(f"Download/Entpacken fehlgeschlagen: {e}")
+            # Aufräumen bei Fehler
             if exe_path.exists():
                 exe_path.unlink()
             
