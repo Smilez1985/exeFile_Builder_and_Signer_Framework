@@ -20,6 +20,7 @@ class AuthenticodeSigner:
         
         if not self.tool_path.exists():
             log.error(f"Signier-Tool nicht gefunden: {self.tool_path}")
+            log.info("Bitte starte den Launcher neu, damit das Tool heruntergeladen wird.")
             return False
 
         timestamp_server = "http://timestamp.digicert.com"
@@ -38,18 +39,20 @@ class AuthenticodeSigner:
 
         try:
             # Ausführen
+            # Wir setzen cwd auf das tools Verzeichnis, damit die Exe ihre DLLs sicher findet
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
-                errors='replace'
+                errors='replace',
+                cwd=str(self.tool_path.parent) 
             )
 
             if result.returncode == 0 and signed_exe_path.exists():
                 log.success("Signatur erfolgreich erstellt.")
                 
-                # Original ersetzen
+                # Original ersetzen (OneFile Style)
                 if exe_path.exists():
                     os.remove(exe_path)
                 shutil.move(signed_exe_path, exe_path)
@@ -57,9 +60,8 @@ class AuthenticodeSigner:
                 log.success(f"Datei signiert: {exe_path.name}")
                 return True
             else:
-                # FIX: Fehler jetzt als ERROR ausgeben, damit man sie sieht!
                 log.error("Signierung fehlgeschlagen.")
-                log.error(f"Tool Exit Code: {result.returncode}")
+                log.error(f"Exit Code: {result.returncode}")
                 if result.stdout:
                     log.error(f"Output: {result.stdout.strip()}")
                 if result.stderr:
