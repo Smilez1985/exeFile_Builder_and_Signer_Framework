@@ -12,7 +12,6 @@ class AuthenticodeSigner:
 
     def __init__(self):
         # Wir suchen das Tool im 'tools' Ordner relativ zum Framework Root
-        # Root ist src/core/../../ -> 
         self.root_dir = Path(__file__).parent.parent.parent
         self.tool_path = self.root_dir / "tools" / "osslsigncode.exe"
 
@@ -21,14 +20,12 @@ class AuthenticodeSigner:
         
         if not self.tool_path.exists():
             log.error(f"Signier-Tool nicht gefunden: {self.tool_path}")
-            log.info("Bitte Neustart versuchen (Environment Check lädt es nach).")
             return False
 
         timestamp_server = "http://timestamp.digicert.com"
         signed_exe_path = exe_path.parent / f"{exe_path.stem}_signed.exe"
 
-        # Befehl aufbauen:
-        # osslsigncode sign -pkcs12 <pfx> -pass <pwd> -n <name> -t <ts> -in <in> -out <out>
+        # Befehl aufbauen
         cmd = [
             str(self.tool_path), "sign",
             "-pkcs12", str(pfx_path),
@@ -40,7 +37,7 @@ class AuthenticodeSigner:
         ]
 
         try:
-            # Ausführen ohne Shell (sicherer, kein Encoding Problem)
+            # Ausführen
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -50,19 +47,23 @@ class AuthenticodeSigner:
             )
 
             if result.returncode == 0 and signed_exe_path.exists():
-                # Erfolg! Wir ersetzen das Original mit der signierten Version
                 log.success("Signatur erfolgreich erstellt.")
                 
-                # Original löschen / Backup machen? Wir überschreiben hart für "OneFile" Feeling
-                os.remove(exe_path)
+                # Original ersetzen
+                if exe_path.exists():
+                    os.remove(exe_path)
                 shutil.move(signed_exe_path, exe_path)
                 
-                log.success(f"Datei signiert und bereit: {exe_path.name}")
+                log.success(f"Datei signiert: {exe_path.name}")
                 return True
             else:
+                # FIX: Fehler jetzt als ERROR ausgeben, damit man sie sieht!
                 log.error("Signierung fehlgeschlagen.")
-                log.debug(f"Tool Output: {result.stdout}")
-                log.debug(f"Tool Error: {result.stderr}")
+                log.error(f"Tool Exit Code: {result.returncode}")
+                if result.stdout:
+                    log.error(f"Output: {result.stdout.strip()}")
+                if result.stderr:
+                    log.error(f"Error: {result.stderr.strip()}")
                 return False
 
         except Exception as e:
