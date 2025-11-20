@@ -1,4 +1,5 @@
 import shutil
+import time
 from pathlib import Path
 import sys
 
@@ -132,6 +133,10 @@ Viel Spaß!
         if not exe_path:
             return
 
+        # --- PAUSE FÜR DATEISYSTEM (Virenscanner etc.) ---
+        log.info("Warte 2 Sekunden auf Dateifreigabe...")
+        time.sleep(2)
+
         # 4. Sign
         log.info("--- Signierung ---")
         success = self.signer.sign_exe(exe_path, pfx_path, cert_pass)
@@ -157,7 +162,7 @@ Viel Spaß!
                 self.cert_manager.create_install_script(dist_dir, pfx_path.stem, final_cer_path)
                 log.info(f"   -> Installer Script erstellt in: {dist_dir}")
             
-            # C) Anleitung erstellen (NEU)
+            # C) Anleitung erstellen
             self.create_readme(dist_dir)
 
             log.success("✅ DONE!")
