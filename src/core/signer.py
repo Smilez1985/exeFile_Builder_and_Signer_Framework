@@ -11,16 +11,38 @@ class AuthenticodeSigner:
         timestamp_server = "http://timestamp.digicert.com"
         
         # PowerShell Script:
-        # Wir verlassen uns auf Autoloading der Module, da wir Bypass nutzen.
+        # Strategie: "Clean Room" Ansatz.
+        # 1. Wir versuchen aktiv, das Modul zu ENTFERNEN, um Zombie-Reste zu löschen.
+        # 2. Wir laden es FRISCH neu.
         ps_script = f"""
         $OutputEncoding = [System.Text.Encoding]::UTF8
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         $ErrorActionPreference = 'Stop'
         
         try {{
-            # WICHTIG: Kein manuelles Import-Module mehr!
-            # Durch -ExecutionPolicy Bypass lädt PowerShell das Nötige selbst.
+            # SCHRITT 1: Aufräumen (Entladen)
+            # Falls Reste des Moduls im Speicher hängen, werfen wir sie raus.
+            if (Get-Module -Name Microsoft.PowerShell.Security) {{
+                Remove-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue
+            }}
 
+            # SCHRITT 2: Sauber Laden
+            # Wir erzwingen einen frischen Import (-Force).
+            # Fehler beim Import (z.B. "TypData existiert schon") fangen wir ab, 
+            # solange das Cmdlet danach verfügbar ist.
+            try {{
+                Import-Module Microsoft.PowerShell.Security -Force -ErrorAction Stop
+            }} catch {{
+                # Wir ignorieren Import-Fehler, falls Teile core-locked sind, 
+                # prüfen aber sofort danach die Funktion.
+            }}
+
+            # SCHRITT 3: Funktions-Check
+            if (-not (Get-Command ConvertTo-SecureString -ErrorAction SilentlyContinue)) {{
+                throw "CRITICAL: Das Security-Modul konnte nicht geladen werden."
+            }}
+
+            # SCHRITT 4: Signieren
             $pwd = ConvertTo-SecureString -String "{password}" -Force -AsPlainText
             $cert = Get-PfxCertificate -FilePath "{pfx_path.absolute()}" -Password $pwd
             
@@ -38,13 +60,14 @@ class AuthenticodeSigner:
         """
 
         try:
-            # Wir behalten "-ExecutionPolicy Bypass", um Rechteprobleme zu lösen
+            # Wir starten eine komplett frische PowerShell-Instanz (-NoProfile)
+            # und hebeln die Richtlinien aus (-ExecutionPolicy Bypass)
             result = subprocess.run(
                 ["powershell", "-ExecutionPolicy", "Bypass", "-NoProfile", "-Command", ps_script],
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
-                errors='replace',
+                encoding='utf-8',       # Zwingend UTF-8, um Encoding-Crashs zu verhindern
+                errors='replace',       # Fehlertoleranz bei unbekannten Zeichen
                 check=True
             )
             
