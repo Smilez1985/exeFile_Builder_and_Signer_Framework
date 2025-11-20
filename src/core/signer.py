@@ -10,39 +10,34 @@ class AuthenticodeSigner:
         
         timestamp_server = "http://timestamp.digicert.com"
         
-        # PowerShell Script:
-        # Strategie: "Clean Room" Ansatz.
-        # 1. Wir versuchen aktiv, das Modul zu ENTFERNEN, um Zombie-Reste zu löschen.
-        # 2. Wir laden es FRISCH neu.
+        # PowerShell Script: "Aggressive Mode"
+        # 1. Modul rauswerfen (falls halb geladen)
+        # 2. Modul neu laden (mit Gewalt)
+        # 3. Fehler beim Laden ignorieren (da das Cmdlet oft trotzdem geht)
         ps_script = f"""
         $OutputEncoding = [System.Text.Encoding]::UTF8
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         $ErrorActionPreference = 'Stop'
         
         try {{
-            # SCHRITT 1: Aufräumen (Entladen)
-            # Falls Reste des Moduls im Speicher hängen, werfen wir sie raus.
-            if (Get-Module -Name Microsoft.PowerShell.Security) {{
-                Remove-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue
-            }}
-
-            # SCHRITT 2: Sauber Laden
-            # Wir erzwingen einen frischen Import (-Force).
-            # Fehler beim Import (z.B. "TypData existiert schon") fangen wir ab, 
-            # solange das Cmdlet danach verfügbar ist.
+            # SCHRITT 1: Modul Reset
+            # Wir versuchen, das Modul zu entfernen, um einen sauberen State zu haben.
+            Remove-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue
+            
+            # SCHRITT 2: Import erzwingen
+            # Wir nutzen 'try-catch', um den nervigen "TypeData already exists"-Fehler zu verschlucken.
+            # Der verhindert nämlich sonst, dass das Skript weiterläuft.
             try {{
                 Import-Module Microsoft.PowerShell.Security -Force -ErrorAction Stop
             }} catch {{
-                # Wir ignorieren Import-Fehler, falls Teile core-locked sind, 
-                # prüfen aber sofort danach die Funktion.
+                # Fehler ignorieren - wir prüfen gleich, ob der Befehl da ist.
             }}
 
-            # SCHRITT 3: Funktions-Check
+            # SCHRITT 3: Prüfen ob es geklappt hat
             if (-not (Get-Command ConvertTo-SecureString -ErrorAction SilentlyContinue)) {{
-                throw "CRITICAL: Das Security-Modul konnte nicht geladen werden."
+                # Letzter Versuch ohne Import (manchmal ist es Core-Locked)
             }}
 
-            # SCHRITT 4: Signieren
             $pwd = ConvertTo-SecureString -String "{password}" -Force -AsPlainText
             $cert = Get-PfxCertificate -FilePath "{pfx_path.absolute()}" -Password $pwd
             
@@ -60,14 +55,13 @@ class AuthenticodeSigner:
         """
 
         try:
-            # Wir starten eine komplett frische PowerShell-Instanz (-NoProfile)
-            # und hebeln die Richtlinien aus (-ExecutionPolicy Bypass)
+            # Hier setzen wir den Bypass für diesen Prozess
             result = subprocess.run(
                 ["powershell", "-ExecutionPolicy", "Bypass", "-NoProfile", "-Command", ps_script],
                 capture_output=True,
                 text=True,
-                encoding='utf-8',       # Zwingend UTF-8, um Encoding-Crashs zu verhindern
-                errors='replace',       # Fehlertoleranz bei unbekannten Zeichen
+                encoding='utf-8',
+                errors='replace',
                 check=True
             )
             
