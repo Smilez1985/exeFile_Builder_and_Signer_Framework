@@ -21,20 +21,13 @@ class PyBuilder:
             d.mkdir(parents=True, exist_ok=True)
 
     def build(self, script_path: Path, app_name: str, icon_path: Path = None, 
-              one_file: bool = True, console: bool = True, clean: bool = True) -> Path:
+              one_file: bool = True, console: bool = True, clean: bool = True,
+              add_data: list = None) -> Path:
         """
         Führt PyInstaller mit den angegebenen Parametern aus.
         
         Args:
-            script_path (Path): Pfad zur .py Datei.
-            app_name (str): Name der fertigen .exe.
-            icon_path (Path, optional): Pfad zum Icon (.ico).
-            one_file (bool): Ob alles in eine einzelne EXE gepackt werden soll.
-            console (bool): Ob ein Konsolenfenster angezeigt werden soll.
-            clean (bool): Ob Cache vor dem Build bereinigt werden soll.
-            
-        Returns:
-            Path: Pfad zur erstellten Executable oder None bei Fehler.
+            add_data (list): Liste von Strings im Format "source;dest" für --add-data
         """
         log.info(f"Starte Build-Prozess für '{app_name}'...")
         
@@ -42,7 +35,7 @@ class PyBuilder:
             log.error(f"Script nicht gefunden: {script_path}")
             return None
 
-        # Basis-Kommando zusammenstellen
+        # Basis-Kommando
         cmd = [
             sys.executable, "-m", "PyInstaller",
             str(script_path),
@@ -52,14 +45,11 @@ class PyBuilder:
             "--specpath", str(self.spec_dir),
         ]
 
-        # Optionen hinzufügen
-        if one_file:
-            cmd.append("--onefile")
-        else:
-            cmd.append("--onedir")
+        # Optionen
+        if one_file: cmd.append("--onefile")
+        else: cmd.append("--onedir")
 
-        if not console:
-            cmd.append("--noconsole")
+        if not console: cmd.append("--noconsole")
             
         if clean:
             cmd.append("--clean")
@@ -67,8 +57,13 @@ class PyBuilder:
 
         if icon_path and icon_path.exists():
             cmd.append(f"--icon={str(icon_path)}")
-        elif icon_path:
-            log.warning(f"Icon nicht gefunden, fahre ohne Icon fort: {icon_path}")
+            
+        # --- NEU: Assets hinzufügen ---
+        if add_data:
+            for data_item in add_data:
+                # data_item ist z.B. "C:/MeinOrdner;MeinOrdner"
+                cmd.append(f"--add-data={data_item}")
+                log.debug(f"Asset hinzugefügt: {data_item}")
 
         # Ausführung
         try:
@@ -82,12 +77,9 @@ class PyBuilder:
                 encoding='utf-8'
             )
 
-            # Echtzeit-Output Logging
             for line in process.stdout:
                 line = line.strip()
                 if line:
-                    # Filtere irrelevante PyInstaller Infos für saubereren Log, 
-                    # zeige aber Fehler und wichtige Schritte
                     if any(x in line for x in ["Error", "WARNING", "Building", "Copying"]):
                         log.debug(f"[PyInstaller] {line}")
 
@@ -110,13 +102,10 @@ class PyBuilder:
             return None
 
     def cleanup(self):
-        """Löscht temporäre Build-Ordner (work, spec)."""
         try:
             log.info("Bereinige temporäre Build-Dateien...")
-            if self.work_dir.exists():
-                shutil.rmtree(self.work_dir)
-            if self.spec_dir.exists():
-                shutil.rmtree(self.spec_dir)
+            if self.work_dir.exists(): shutil.rmtree(self.work_dir)
+            if self.spec_dir.exists(): shutil.rmtree(self.spec_dir)
             log.success("Bereinigung abgeschlossen.")
         except Exception as e:
-            log.warning(f"Konnte temporäre Dateien nicht vollständig löschen: {e}")
+            log.warning(f"Fehler bei Bereinigung: {e}")
