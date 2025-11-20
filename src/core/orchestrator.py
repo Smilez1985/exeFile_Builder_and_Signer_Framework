@@ -19,6 +19,7 @@ class BuildOrchestrator:
         self.network = NetworkGuard()
         
     def setup_environment(self, project_root: Path):
+        # Das lädt jetzt auch osslsigncode.exe
         self.env_manager.prepare_environment(project_root)
 
     def get_cert_path(self, config: dict) -> Path:
@@ -53,9 +54,10 @@ class BuildOrchestrator:
             log.error(f"Script fehlt: {script_path}")
             return
 
+        # 1. Tools laden (osslsigncode)
         self.setup_environment(Path("."))
 
-        # Zertifikat
+        # 2. Zertifikat
         try:
             pfx_path = self.get_cert_path(config)
             cert_pass = config.get("cert_password", "")
@@ -63,44 +65,31 @@ class BuildOrchestrator:
             log.error(f"Zertifikats-Fehler: {e}")
             return
 
-        # --- ASSETS VORBEREITEN ---
-        # Wir müssen entscheiden: Datei -> Root, Ordner -> Eigener Ordner
+        # 3. Assets
         raw_assets = config.get("assets", [])
         formatted_assets = []
-        
         for asset in raw_assets:
             path_obj = Path(asset)
-            if not path_obj.exists():
-                log.warning(f"Asset ignoriert (nicht gefunden): {asset}")
-                continue
+            if not path_obj.exists(): continue
             
             if path_obj.is_file():
-                # Datei: C:\foo\bar.txt -> .;bar.txt (bzw Root)
-                # Windows Syntax: "SourcePath;."
                 formatted_assets.append(f"{asset};.")
-                log.info(f"Asset (Datei): {path_obj.name} -> Root")
             elif path_obj.is_dir():
-                # Ordner: C:\foo\configs -> configs;configs
-                # Windows Syntax: "SourcePath;DestFolderName"
-                folder_name = path_obj.name
-                formatted_assets.append(f"{asset};{folder_name}")
-                log.info(f"Asset (Ordner): {path_obj.name} -> /{folder_name}")
+                formatted_assets.append(f"{asset};{path_obj.name}")
 
-        # Build
+        # 4. Build
         exe_path = self.builder.build(
             script_path=script_path,
             app_name=config.get("app_name", "MyApp"),
             icon_path=Path(config.get("icon_path")) if config.get("icon_path") else None,
             console=config.get("console", True),
             one_file=config.get("one_file", True),
-            add_data=formatted_assets # Liste übergeben
+            add_data=formatted_assets
         )
 
-        if not exe_path:
-            log.error("Build fehlgeschlagen.")
-            return
+        if not exe_path: return
 
-        # Sign
+        # 5. Sign (Binary Mode)
         log.info("--- Signierung ---")
         success = self.signer.sign_exe(exe_path, pfx_path, cert_pass)
         
