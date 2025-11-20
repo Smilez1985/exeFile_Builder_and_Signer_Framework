@@ -42,14 +42,18 @@ class EnvironmentManager:
         """Lädt osslsigncode herunter, falls es fehlt."""
         exe_path = self.tools_dir / "osslsigncode.exe"
         if exe_path.exists():
-            log.debug("Signier-Tool (osslsigncode) ist bereit.")
-            return
+            # Kurzer Test, ob die Datei auch ausführbar/gültig ist (Größe > 0)
+            if exe_path.stat().st_size > 0:
+                log.debug("Signier-Tool (osslsigncode) ist bereit.")
+                return
+            else:
+                log.warning("Signier-Tool ist beschädigt (0 Byte). Lade neu...")
 
         log.warning("Signier-Tool (osslsigncode) fehlt. Starte Download...")
         self.network.wait_for_network()
 
-        # URL zur Windows Binary (GitHub Release)
-        url = "https://github.com/johanneshauser/osslsigncode/releases/download/v2.9/osslsigncode-2.9-windows.zip"
+        # NEUER LINK (Offizielles Repo, Version 2.10)
+        url = "https://github.com/mtrojnar/osslsigncode/releases/download/2.10/osslsigncode-2.10-windows-x64-mingw.zip"
         
         try:
             log.info("Lade osslsigncode herunter...")
@@ -57,22 +61,26 @@ class EnvironmentManager:
             r.raise_for_status()
             
             log.info("Entpacke Tool...")
+            found = False
             with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-                # Wir suchen die .exe im Zip (manchmal in Unterordnern)
+                # Wir suchen die .exe im Zip (egal in welchem Unterordner)
                 for file in z.namelist():
                     if file.endswith("osslsigncode.exe"):
                         with z.open(file) as source, open(exe_path, "wb") as target:
                             shutil.copyfileobj(source, target)
+                        found = True
                         break
             
-            if exe_path.exists():
+            if found and exe_path.exists():
                 log.success(f"Signier-Tool installiert: {exe_path}")
             else:
                 raise FileNotFoundError("osslsigncode.exe nicht im Zip gefunden")
                 
         except Exception as e:
             log.error(f"Download von osslsigncode fehlgeschlagen: {e}")
-            # Nicht crashen, Signierung wird dann halt fehlschlagen aber Build geht
+            # Wir löschen die kaputte Datei, damit beim nächsten Start ein neuer Versuch unternommen wird
+            if exe_path.exists():
+                exe_path.unlink()
             
     def _ensure_openssl(self):
         if shutil.which("openssl"):
