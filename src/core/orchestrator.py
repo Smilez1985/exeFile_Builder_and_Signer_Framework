@@ -67,7 +67,6 @@ class BuildOrchestrator:
         cert_name = config.get("cert_name", "MySelfSignedCert")
         
         # Config Flag für OpenSSL (Standard: False/PowerShell)
-        # Du kannst das im main.py Dictionary auf True setzen!
         use_openssl = config.get("use_openssl", False)
         
         try:
