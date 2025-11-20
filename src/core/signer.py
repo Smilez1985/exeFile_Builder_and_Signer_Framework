@@ -8,10 +8,12 @@ class AuthenticodeSigner:
     def sign_exe(self, exe_path: Path, pfx_path: Path, password: str) -> bool:
         log.info(f"Signiere {exe_path.name} mit {pfx_path.name}...")
         
-        # Hinweis: TimestampServer ist wichtig für Gültigkeit, auch wenn Cert abläuft.
         timestamp_server = "http://timestamp.digicert.com"
         
+        # Powershell Script: Wir erzwingen UTF-8 Output, um Encoding-Probleme zu vermeiden
         ps_script = f"""
+        $OutputEncoding = [System.Text.Encoding]::UTF8
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         $ErrorActionPreference = 'Stop'
         try {{
             $pwd = ConvertTo-SecureString -String "{password}" -Force -AsPlainText
@@ -31,10 +33,13 @@ class AuthenticodeSigner:
         """
 
         try:
+            # FIX: Encoding explizit auf UTF-8 setzen und Fehler tolerieren (replace)
             result = subprocess.run(
                 ["powershell", "-Command", ps_script],
                 capture_output=True,
                 text=True,
+                encoding='utf-8', 
+                errors='replace',
                 check=True
             )
             
@@ -48,5 +53,10 @@ class AuthenticodeSigner:
                 return False
 
         except subprocess.CalledProcessError as e:
-            log.error(f"Fehler beim Signieren via PowerShell: {e.stderr}")
+            # Auch hier sicherstellen, dass wir uns beim Fehler-Loggen nicht zerlegen
+            err_msg = e.stderr if e.stderr else "Unbekannter PowerShell Fehler"
+            log.error(f"Fehler beim Signieren via PowerShell: {err_msg}")
+            return False
+        except Exception as e:
+            log.error(f"Allgemeiner Fehler im Signer: {e}")
             return False
