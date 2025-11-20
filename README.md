@@ -77,7 +77,9 @@ Für Server oder schnelle Builds:
 
 python main.py
 ```
-🔑 Zertifikate & Trust
+
+### **🔑 Zertifikate & Trust**
+
 Da wir selbst-signierte Zertifikate erstellen, vertraut Windows diesen standardmäßig nicht. 
 Das Framework erstellt im builds/-Ordner automatisch eine install_cert.bat. 
 Führen Sie diese einmalig als Administrator aus, um das Zertifikat in den "Trusted People" Store zu importieren. 
