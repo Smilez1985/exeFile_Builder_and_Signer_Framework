@@ -25,11 +25,13 @@ class PyBuilder:
               add_data: list = None) -> Path:
         """
         Führt PyInstaller mit den angegebenen Parametern aus.
-        
-        Args:
-            add_data (list): Liste von Strings im Format "source;dest" für --add-data
         """
-        log.info(f"Starte Build-Prozess für '{app_name}'...")
+        # FIX: Sicherstellen, dass app_name keine .exe Endung hat (vermeidet .exe.exe)
+        clean_app_name = app_name
+        if clean_app_name.lower().endswith(".exe"):
+            clean_app_name = clean_app_name[:-4]
+
+        log.info(f"Starte Build-Prozess für '{clean_app_name}'...")
         
         if not script_path.exists():
             log.error(f"Script nicht gefunden: {script_path}")
@@ -39,7 +41,7 @@ class PyBuilder:
         cmd = [
             sys.executable, "-m", "PyInstaller",
             str(script_path),
-            "--name", app_name,
+            "--name", clean_app_name, # Bereinigten Namen nutzen
             "--distpath", str(self.dist_dir),
             "--workpath", str(self.work_dir),
             "--specpath", str(self.spec_dir),
@@ -58,10 +60,9 @@ class PyBuilder:
         if icon_path and icon_path.exists():
             cmd.append(f"--icon={str(icon_path)}")
             
-        # --- NEU: Assets hinzufügen ---
+        # Assets hinzufügen
         if add_data:
             for data_item in add_data:
-                # data_item ist z.B. "C:/MeinOrdner;MeinOrdner"
                 cmd.append(f"--add-data={data_item}")
                 log.debug(f"Asset hinzugefügt: {data_item}")
 
@@ -86,12 +87,14 @@ class PyBuilder:
             process.wait()
 
             if process.returncode == 0:
-                exe_path = self.dist_dir / f"{app_name}.exe"
+                # Wir suchen nach dem bereinigten Namen + .exe
+                exe_path = self.dist_dir / f"{clean_app_name}.exe"
+                
                 if exe_path.exists():
                     log.success(f"Build erfolgreich! Datei liegt unter: {exe_path}")
                     return exe_path
                 else:
-                    log.error("PyInstaller lief durch, aber keine EXE gefunden.")
+                    log.error(f"PyInstaller lief durch, aber Datei nicht gefunden: {exe_path}")
                     return None
             else:
                 log.error(f"PyInstaller beendet mit Fehlercode {process.returncode}")
