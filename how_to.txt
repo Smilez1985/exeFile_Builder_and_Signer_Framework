@@ -1,0 +1,85 @@
+################################################################################
+#             SCHRITT-FÜR-SCHRITT ANLEITUNG (DAU EDITION)                      #
+#               ExeFile Builder & Signer Framework                             #
+################################################################################
+
+SCHRITT 1: VORBEREITUNG (Das musst du nur 1x machen)
+--------------------------------------------------------------------------------
+1. Installiere Python
+   - Lade Python 3.10 oder neuer herunter: https://www.python.org/downloads/
+   - WICHTIG: Beim Installieren unten den Haken setzen bei: "Add Python to PATH"
+
+2. Lade dieses Programm herunter
+   - Falls du Git hast: "git clone <repo-url>"
+   - Falls nicht: Klicke auf GitHub auf "Code" -> "Download ZIP" und entpacke es.
+
+3. Öffne eine Konsole (PowerShell oder CMD)
+   - Gehe in den Ordner, wo du das Programm entpackt hast.
+   - Tipp: Tippe "cd ", ziehe den Ordner rein und drücke Enter.
+
+4. Installiere die benötigten Bausteine
+   - Tippe in die Konsole:
+     pip install -r Requirements.txt
+   - Drücke Enter und warte, bis alles durchgelaufen ist.
+
+
+SCHRITT 2: DAS PROGRAMM STARTEN
+--------------------------------------------------------------------------------
+1. Starte die grafische Oberfläche
+   - Tippe in die Konsole:
+     python main_gui.py
+
+   -> Ein dunkles Fenster sollte sich öffnen.
+
+   (Alternativ für Profis ohne Maus: "python main.py")
+
+
+SCHRITT 3: EINE EXE ERSTELLEN (Ganz einfach)
+--------------------------------------------------------------------------------
+1. Wähle dein Script aus
+   - Ziehe dein Python-Script (.py) einfach per Drag & Drop in das oberste Feld.
+   - ODER klicke auf den Button "📂" und such es raus.
+
+2. (Optional) Wähle ein Icon
+   - Ziehe eine Icon-Datei (.ico) in das zweite Feld.
+   - Wenn du keins hast, lass das Feld leer.
+
+3. Einstellungen
+   - App Name: Gib deinem Programm einen coolen Namen.
+   - OneFile: Lass den Haken drin, wenn du nur EINE einzige .exe Datei am Ende willst.
+   - Konsole anzeigen:
+     - Haken AN: Es geht ein schwarzes Fenster auf, wenn dein Programm startet (gut für Tests).
+     - Haken AUS: Das Programm läuft "unsichtbar" oder nur mit GUI (für fertige Apps).
+   - OpenSSL: 
+     - Haken AUS: Nutzt Windows PowerShell (einfacher).
+     - Haken AN: Nutzt OpenSSL (Profi-Modus, lädt Tools bei Bedarf nach).
+
+4. Klicke auf "🚀 START BUILD & SIGN"
+   - Lehn dich zurück.
+   - Das schwarze Fenster unten zeigt dir, was passiert.
+   - Warte auf die grüne Meldung "[SUCCESS]".
+
+
+SCHRITT 4: WO IST MEINE DATEI?
+--------------------------------------------------------------------------------
+1. Gehe in den Ordner "builds/dist"
+   - Dort liegt deine fertige .exe Datei.
+
+2. WICHTIG: DAMIT ES LÄUFT (Zertifikat installieren)
+   - Da wir das Zertifikat selbst erstellt haben, kennt Windows das noch nicht.
+   - Gehe in den Ordner "builds".
+   - Mache einen RECHTSKLICK auf "install_cert.bat" -> "Als Administrator ausführen".
+   - Bestätige die Meldungen mit "Ja".
+   - DAS MUSST DU NUR EINMAL PRO ZERTIFIKAT MACHEN!
+
+3. Fertig!
+   - Du kannst deine .exe jetzt starten. Sie ist signiert und einsatzbereit.
+
+
+HILFE BEI FEHLERN
+--------------------------------------------------------------------------------
+- "OpenSSL fehlt": Das Programm versucht es selbst zu laden. Warte kurz.
+- "Drag & Drop geht nicht": Vielleicht fehlt das Modul. Tippe: "pip install tkinterdnd2"
+- "Script startet nicht": Hast du dependencies vergessen? Das Tool prüft das meistens selbst, aber stelle sicher, dass dein Script auch alleine läuft.
+
+Viel Erfolg!
