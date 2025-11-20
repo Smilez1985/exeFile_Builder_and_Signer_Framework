@@ -36,7 +36,6 @@ class CertificateManager:
         cnf_path = self.store_path / "temp_openssl.cnf"
 
         # 1. Config erstellen für Code Signing Extensions
-        # Das ist wichtig, sonst akzeptiert Windows die Signatur nicht als "Code Signing"
         openssl_cnf = f"""
         [req]
         distinguished_name = req_distinguished_name
@@ -55,7 +54,6 @@ class CertificateManager:
 
         try:
             # 2. Private Key & Certificate generieren (in einem Rutsch self-signed)
-            # openssl req -x509 -nodes -days 3650 -newkey rsa:4096 ...
             subprocess.run([
                 "openssl", "req", "-x509", "-nodes", "-days", "3650",
                 "-newkey", "rsa:4096",
@@ -75,7 +73,7 @@ class CertificateManager:
 
             log.success(f"OpenSSL Zertifikat erstellt: {pfx_path.name}")
             
-            # Aufräumen (Key und Config löschen, Cert behalten für Install-Script)
+            # Aufräumen
             if key_path.exists(): os.remove(key_path)
             if cnf_path.exists(): os.remove(cnf_path)
 
@@ -84,7 +82,6 @@ class CertificateManager:
         except subprocess.CalledProcessError as e:
             log.error("OpenSSL Fehler. Ist OpenSSL installiert?")
             log.debug(str(e))
-            if hasattr(e, 'stderr'): log.debug(e.stderr.decode())
             raise RuntimeError("OpenSSL Certificate creation failed")
         except FileNotFoundError:
             log.error("OpenSSL Executable nicht gefunden! Bitte 'ensure_system_tools' laufen lassen.")
