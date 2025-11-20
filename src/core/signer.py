@@ -7,11 +7,10 @@ from src.utils.helpers import log
 class AuthenticodeSigner:
     """
     Signiert Executables mit osslsigncode (Binary).
-    Vermeidet PowerShell-Probleme komplett.
     """
 
     def __init__(self):
-        # Wir suchen das Tool im 'tools' Ordner relativ zum Framework Root
+        # Wir suchen das Tool im 'tools' Ordner
         self.root_dir = Path(__file__).parent.parent.parent
         self.tool_path = self.root_dir / "tools" / "osslsigncode.exe"
 
@@ -20,7 +19,6 @@ class AuthenticodeSigner:
         
         if not self.tool_path.exists():
             log.error(f"Signier-Tool nicht gefunden: {self.tool_path}")
-            log.info("Bitte starte den Launcher neu, damit das Tool heruntergeladen wird.")
             return False
 
         timestamp_server = "http://timestamp.digicert.com"
@@ -38,21 +36,23 @@ class AuthenticodeSigner:
         ]
 
         try:
-            # Ausführen
-            # Wir setzen cwd auf das tools Verzeichnis, damit die Exe ihre DLLs sicher findet
+            # WICHTIG: cwd setzen! 
+            # Damit findet die EXE ihre DLLs (libcrypto etc.) im selben Ordner.
+            working_dir = self.tool_path.parent
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                cwd=str(self.tool_path.parent) 
+                cwd=str(working_dir)  # <--- DAS IST DER FIX
             )
 
             if result.returncode == 0 and signed_exe_path.exists():
                 log.success("Signatur erfolgreich erstellt.")
                 
-                # Original ersetzen (OneFile Style)
+                # Original überschreiben
                 if exe_path.exists():
                     os.remove(exe_path)
                 shutil.move(signed_exe_path, exe_path)
@@ -60,8 +60,11 @@ class AuthenticodeSigner:
                 log.success(f"Datei signiert: {exe_path.name}")
                 return True
             else:
+                # Fehler laut anzeigen statt verstecken
                 log.error("Signierung fehlgeschlagen.")
-                log.error(f"Exit Code: {result.returncode}")
+                log.error(f"Exit Code: {result.returncode}") 
+                # Tipp: Exit Code 3221225781 (0xC0000135) heißt "DLL fehlt"
+                
                 if result.stdout:
                     log.error(f"Output: {result.stdout.strip()}")
                 if result.stderr:
