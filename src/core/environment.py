@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import shutil
 import importlib.util
 import pkg_resources
 from pathlib import Path
@@ -9,8 +10,7 @@ from src.core.network import NetworkGuard
 class EnvironmentManager:
     """
     Kümmert sich um die Vorbereitung der Build-Umgebung.
-    Erkennt requirements.txt, pyproject.toml (Poetry) und installiert Dependencies.
-    Integriert robusten Netzwerk-Check und Existenz-Prüfung.
+    Managed Python-Dependencies (Pip/Poetry) UND System-Tools (OpenSSL).
     """
     
     def __init__(self):
@@ -18,42 +18,91 @@ class EnvironmentManager:
 
     def prepare_environment(self, project_path: Path):
         """
-        Analysiert den Projektordner und installiert fehlende Pakete.
+        Hauptmethode: Prüft alles (System Tools + Python Packages).
         """
         log.info(f"Analysiere Umgebung in: {project_path}")
         
-        # Check: Virtual Environment
+        # 1. System Tools prüfen (OpenSSL)
+        self._ensure_system_tools()
+
+        # 2. Python Environment prüfen
         if self._is_venv():
             log.debug("Aktives Virtual Environment (VENV) erkannt.")
         else:
-            log.warning("ACHTUNG: Kein aktives VENV erkannt. Installation erfolgt global/user-scope.")
+            log.warning("ACHTUNG: Kein aktives VENV erkannt. Installation erfolgt global.")
 
-        # 1. Poetry Check
+        # 3. Python Dependencies installieren
         if (project_path / "pyproject.toml").exists() and (project_path / "poetry.lock").exists():
             self._install_poetry(project_path)
-        # 2. Requirements.txt Check
         elif (project_path / "requirements.txt").exists():
             self._install_pip(project_path / "requirements.txt")
         else:
-            log.info("Keine expliziten Dependency-Dateien (requirements.txt/poetry.lock) gefunden.")
+            log.info("Keine expliziten Dependency-Dateien gefunden.")
+
+    def _ensure_system_tools(self):
+        """
+        Prüft auf notwendige System-Tools (aktuell: OpenSSL).
+        Versucht automatische Installation via Winget, falls fehlend.
+        """
+        log.info("Prüfe System-Tools...")
+        
+        if not shutil.which("openssl"):
+            log.warning("OpenSSL wurde nicht im PATH gefunden!")
+            log.info("Versuche automatische Installation via Winget (PowerShell)...")
+            
+            # Endlosschleife bis installiert (oder User Abbruch)
+            while not shutil.which("openssl"):
+                self.network.wait_for_network()
+                
+                log.info("Starte Download & Installation von OpenSSL...")
+                try:
+                    # Winget Silent Install via PowerShell
+                    # Wir nutzen 'ShiningLight.OpenSSL' oder 'Git.Git' (da ist openssl drin). 
+                    # ShiningLight ist direkter.
+                    cmd = [
+                        "powershell", "-Command",
+                        "winget install -e --id ShiningLight.OpenSSL --accept-source-agreements --accept-package-agreements --silent"
+                    ]
+                    subprocess.run(cmd, check=True)
+                    
+                    log.info("Installation angestoßen. Prüfe erneut...")
+                    
+                    # Reload Path für den aktuellen Prozess schwierig, oft Neustart nötig.
+                    # Wir prüfen zumindest, ob der Standardpfad existiert
+                    possible_paths = [
+                        Path(r"C:\Program Files\OpenSSL-Win64\bin\openssl.exe"),
+                        Path(r"C:\Program Files\OpenSSL\bin\openssl.exe")
+                    ]
+                    found = False
+                    for p in possible_paths:
+                        if p.exists():
+                            log.success(f"OpenSSL gefunden unter: {p}")
+                            # Zum PATH hinzufügen für diese Session
+                            import os
+                            os.environ["PATH"] += os.pathsep + str(p.parent)
+                            found = True
+                            break
+                    
+                    if not found and not shutil.which("openssl"):
+                        log.warning("OpenSSL installiert, aber noch nicht im PATH. Bitte Shell neu starten oder Pfad prüfen.")
+                        break # Brechen Loop ab, User muss ggf. eingreifen
+                        
+                except subprocess.CalledProcessError as e:
+                    log.error(f"Installation fehlgeschlagen: {e}")
+                    log.info("Warte 10 Sekunden vor nächstem Versuch...")
+                    import time
+                    time.sleep(10)
+        else:
+            log.debug("OpenSSL ist installiert und verfügbar.")
 
     def _is_venv(self) -> bool:
-        """Prüft, ob wir in einer Venv laufen."""
         return (hasattr(sys, 'real_prefix') or
                 (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
 
     def _check_package_installed(self, package_name: str) -> bool:
-        """
-        Prüft, ob ein Paket bereits installiert ist.
-        Bereinigt Versionsnummern (z.B. 'requests==2.31.0' -> 'requests').
-        """
         clean_name = package_name.split('==')[0].split('>=')[0].split('<=')[0].strip()
-        
-        # Methode 1: importlib (schnell)
         if importlib.util.find_spec(clean_name) is not None:
             return True
-            
-        # Methode 2: pkg_resources (genauer für installierte Metadaten)
         try:
             pkg_resources.get_distribution(clean_name)
             return True
@@ -61,79 +110,55 @@ class EnvironmentManager:
             return False
 
     def _install_pip(self, req_file: Path):
-        """Liest requirements.txt und installiert fehlende Pakete."""
         log.info(f"Prüfe Dependencies aus {req_file.name}...")
-        
         to_install = []
-        
-        # 1. Liste der fehlenden Pakete erstellen (If-Exist Abfrage)
         try:
             with open(req_file, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-                
             for line in lines:
                 line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                
-                # Einfacher Check auf Paketname
+                if not line or line.startswith('#'): continue
                 if not self._check_package_installed(line):
                     to_install.append(line)
-                else:
-                    log.debug(f"Paket bereits vorhanden: {line}")
-
         except Exception as e:
-            log.error(f"Konnte requirements.txt nicht lesen: {e}")
+            log.error(f"Fehler beim Lesen von requirements.txt: {e}")
             return
 
         if not to_install:
-            log.success("Alle Dependencies sind bereits installiert.")
+            log.success("Dependencies bereits aktuell.")
             return
 
-        # 2. Installation starten (nur wenn nötig)
         log.info(f"Installiere {len(to_install)} fehlende Pakete...")
-        
-        # Ping Loop: Sicherstellen, dass wir online sind
         self.network.wait_for_network()
 
         def run_install():
-            # Wir übergeben die Liste der fehlenden Pakete direkt an Pip
             subprocess.check_call(
                 [sys.executable, "-m", "pip", "install"] + to_install,
-                stdout=sys.stdout, # Output anzeigen für User Feedback
-                stderr=subprocess.PIPE
+                stdout=sys.stdout, stderr=subprocess.PIPE
             )
 
         try:
             self.network.run_with_retry(run_install)
-            log.success("Pip Dependencies erfolgreich installiert.")
+            log.success("Pip Installation erfolgreich.")
         except Exception as e:
-            log.error(f"Pip Installation fehlgeschlagen: {e}")
-            raise
+            log.error(f"Pip Fehler: {e}")
 
     def _install_poetry(self, project_path: Path):
-        log.info("Poetry Projekt erkannt. Prüfe Umgebung...")
-        
-        # Prüfen ob Poetry installiert ist
-        try:
-            subprocess.run(["poetry", "--version"], check=True, capture_output=True)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            log.error("Poetry ist nicht im PATH gefunden! Bitte installieren.")
+        log.info("Poetry Projekt erkannt.")
+        # Check Poetry Existenz
+        if not shutil.which("poetry"):
+            log.error("Poetry fehlt! Bitte manuell installieren (pip install poetry).")
             return
 
-        # Ping Loop für Poetry
         self.network.wait_for_network()
-
         def run_poetry():
-            log.info("Führe 'poetry install' aus...")
             subprocess.check_call(
                 ["poetry", "install", "--no-root"],
                 cwd=str(project_path),
                 stdout=sys.stdout
             )
-
         try:
             self.network.run_with_retry(run_poetry)
-            log.success("Poetry Dependencies aktualisiert.")
+            log.success("Poetry Install erfolgreich.")
         except Exception as e:
-            log.error(f"Poetry Installation fehlgeschlagen: {e}")
+            log.error(f"Poetry Fehler: {e}")
