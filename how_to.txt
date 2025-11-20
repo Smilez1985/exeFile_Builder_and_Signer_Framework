@@ -1,85 +1,90 @@
 ################################################################################
-#             SCHRITT-FÜR-SCHRITT ANLEITUNG (DAU EDITION)                      #
-#               ExeFile Builder & Signer Framework                             #
+#                   HANDBUCH: ExeFile Builder Framework                        #
+#                                                                              #
+#             "Vom Python-Script zur signierten EXE in 3 Klicks"               #
 ################################################################################
 
-SCHRITT 1: VORBEREITUNG (Das musst du nur 1x machen)
 --------------------------------------------------------------------------------
-1. Installiere Python
-   - Lade Python 3.10 oder neuer herunter: https://www.python.org/downloads/
-   - WICHTIG: Beim Installieren unten den Haken setzen bei: "Add Python to PATH"
-
-2. Lade dieses Programm herunter
-   - Falls du Git hast: "git clone <repo-url>"
-   - Falls nicht: Klicke auf GitHub auf "Code" -> "Download ZIP" und entpacke es.
-
-3. Öffne eine Konsole (PowerShell oder CMD)
-   - Gehe in den Ordner, wo du das Programm entpackt hast.
-   - Tipp: Tippe "cd ", ziehe den Ordner rein und drücke Enter.
-
-4. Installiere die benötigten Bausteine
-   - Tippe in die Konsole:
-     pip install -r Requirements.txt
-   - Drücke Enter und warte, bis alles durchgelaufen ist.
-
-
-SCHRITT 2: DAS PROGRAMM STARTEN
+ KAPITEL 1: ERSTE SCHRITTE (INSTALLATION)
 --------------------------------------------------------------------------------
-1. Starte die grafische Oberfläche
-   - Tippe in die Konsole:
+1. Python installieren
+   - Lade Python herunter (Version 3.10 oder neuer).
+   - WICHTIG: Setze bei der Installation den Haken bei "Add Python to PATH".
+
+2. Programm starten
+   - Doppelklicke auf die Datei "start_gui.bat" (falls erstellt)
+   - ODER öffne eine Konsole/PowerShell in diesem Ordner und tippe:
      python main_gui.py
 
-   -> Ein dunkles Fenster sollte sich öffnen.
+   -> HINWEIS: Beim allerersten Start prüft das Programm, ob alle Bauteile 
+      da sind. Wenn etwas fehlt (z.B. Drag & Drop Bibliothek), wartet es auf 
+      eine Internetverbindung und lädt es automatisch nach. Das kann beim 
+      ersten Mal kurz dauern.
 
-   (Alternativ für Profis ohne Maus: "python main.py")
-
-
-SCHRITT 3: EINE EXE ERSTELLEN (Ganz einfach)
 --------------------------------------------------------------------------------
-1. Wähle dein Script aus
-   - Ziehe dein Python-Script (.py) einfach per Drag & Drop in das oberste Feld.
-   - ODER klicke auf den Button "📂" und such es raus.
+ KAPITEL 2: DIE GRAFISCHE OBERFLÄCHE (GUI)
+--------------------------------------------------------------------------------
+Hier kannst du alles per Drag & Drop erledigen.
 
-2. (Optional) Wähle ein Icon
-   - Ziehe eine Icon-Datei (.ico) in das zweite Feld.
-   - Wenn du keins hast, lass das Feld leer.
+[FELD 1: Python Script]
+   - Ziehe dein Script (.py) einfach mit der Maus in dieses Feld.
+   - Der Pfad wird automatisch eingetragen.
+   - Der "App Name" wird automatisch aus dem Dateinamen erraten (kannst du ändern).
 
-3. Einstellungen
-   - App Name: Gib deinem Programm einen coolen Namen.
-   - OneFile: Lass den Haken drin, wenn du nur EINE einzige .exe Datei am Ende willst.
+[FELD 2: Icon Datei]
+   - Willst du ein eigenes Logo für deine EXE? 
+   - Ziehe eine .ico Datei in das zweite Feld.
+   - Wenn du das Feld leer lässt, wird das Standard-Icon verwendet.
+
+[EINSTELLUNGEN]
+   - App Name: Wie soll die fertige Datei heißen?
+   - OneFile: [X] Empfohlen. Packt alles in EINE Datei.
    - Konsole anzeigen:
-     - Haken AN: Es geht ein schwarzes Fenster auf, wenn dein Programm startet (gut für Tests).
-     - Haken AUS: Das Programm läuft "unsichtbar" oder nur mit GUI (für fertige Apps).
-   - OpenSSL: 
-     - Haken AUS: Nutzt Windows PowerShell (einfacher).
-     - Haken AN: Nutzt OpenSSL (Profi-Modus, lädt Tools bei Bedarf nach).
+     [X] Gut zum Testen (schwarzes Fenster im Hintergrund).
+     [ ] Für fertige Programme (wirkt professioneller).
+   - OpenSSL Engine:
+     [ ] Aus: Nutzt Windows PowerShell (einfach & schnell).
+     [X] An: Nutzt OpenSSL (für Profis, lädt OpenSSL bei Bedarf nach).
 
-4. Klicke auf "🚀 START BUILD & SIGN"
-   - Lehn dich zurück.
-   - Das schwarze Fenster unten zeigt dir, was passiert.
-   - Warte auf die grüne Meldung "[SUCCESS]".
+[START]
+   - Klicke auf "🚀 START BUILD & SIGN".
+   - Lehn dich zurück. Im schwarzen Fenster unten siehst du den Fortschritt.
+   - Warte auf die grüne Meldung "SUCCESS".
 
-
-SCHRITT 4: WO IST MEINE DATEI?
 --------------------------------------------------------------------------------
-1. Gehe in den Ordner "builds/dist"
-   - Dort liegt deine fertige .exe Datei.
-
-2. WICHTIG: DAMIT ES LÄUFT (Zertifikat installieren)
-   - Da wir das Zertifikat selbst erstellt haben, kennt Windows das noch nicht.
-   - Gehe in den Ordner "builds".
-   - Mache einen RECHTSKLICK auf "install_cert.bat" -> "Als Administrator ausführen".
-   - Bestätige die Meldungen mit "Ja".
-   - DAS MUSST DU NUR EINMAL PRO ZERTIFIKAT MACHEN!
-
-3. Fertig!
-   - Du kannst deine .exe jetzt starten. Sie ist signiert und einsatzbereit.
-
-
-HILFE BEI FEHLERN
+ KAPITEL 3: FÜR PROFI-NUTZER (CLI / TERMINAL)
 --------------------------------------------------------------------------------
-- "OpenSSL fehlt": Das Programm versucht es selbst zu laden. Warte kurz.
-- "Drag & Drop geht nicht": Vielleicht fehlt das Modul. Tippe: "pip install tkinterdnd2"
-- "Script startet nicht": Hast du dependencies vergessen? Das Tool prüft das meistens selbst, aber stelle sicher, dass dein Script auch alleine läuft.
+Du kannst das Tool auch ohne Grafik in der Konsole nutzen.
+Befehl: python main.py
 
-Viel Erfolg!
+1. Folge den Anweisungen im Text-Menü.
+2. Wenn du nach dem Icon gefragt wirst:
+   - Ziehe die .ico Datei einfach in das Terminal-Fenster.
+   - Der Pfad wird eingefügt. Drücke Enter.
+
+--------------------------------------------------------------------------------
+ KAPITEL 4: FERTIGSTELLUNG & SIGNATUR
+--------------------------------------------------------------------------------
+Deine fertige Datei liegt im Ordner: "builds/dist"
+
+WICHTIG - "Warum warnt Windows mich?"
+Da wir das Zertifikat selbst erstellt haben, kennt dein PC es noch nicht.
+
+Lösung (Nur 1x nötig):
+1. Gehe in den Ordner "builds".
+2. Rechtsklick auf "install_cert.bat" -> "Als Administrator ausführen".
+3. Bestätige mit "Ja".
+
+Jetzt startet deine EXE ohne Warnmeldung!
+
+--------------------------------------------------------------------------------
+ FEHLERBEHEBUNG
+--------------------------------------------------------------------------------
+- Das Programm schließt sich sofort?
+  -> Starte es über die PowerShell ("python main_gui.py"), um Fehlermeldungen zu sehen.
+
+- "Warte auf Netzwerk..."
+  -> Das Programm braucht Internet, um fehlende Teile nachzuladen. Prüfe dein WLAN.
+
+- Drag & Drop geht nicht?
+  -> Starte das Programm neu. Manchmal greift die Bibliothek erst beim zweiten Start.
