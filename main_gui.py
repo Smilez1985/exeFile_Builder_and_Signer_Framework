@@ -13,7 +13,7 @@ from src.utils.helpers import log
 
 def restart_script():
     """Startet das Script neu, damit frisch installierte Module geladen werden können."""
-    log.info("Starte Anwendung neu...")
+    log.info("Starte Anwendung neu, um Änderungen zu übernehmen...")
     python = sys.executable
     os.execl(python, python, *sys.argv)
 
@@ -25,11 +25,13 @@ if __name__ == "__main__":
         project_root = Path(__file__).parent
         
         # Prüft requirements.txt und installiert fehlendes (inkl. Ping Loop)
+        # Wenn hier etwas installiert wird, ist ein Neustart oft sicherer
         env.prepare_environment(project_root)
         
     except Exception as e:
         log.error(f"Kritischer Fehler beim Environment-Setup: {e}")
-        input("Drücken Sie Enter zum Beenden...")
+        print("Drücken Sie Enter zum Beenden...")
+        input()
         sys.exit(1)
 
     # 2. Import der Drag & Drop Lib (jetzt sicher vorhanden)
@@ -40,12 +42,20 @@ if __name__ == "__main__":
         restart_script()
 
     # 3. GUI Start
-    from src.ui.gui import AppGUI
-    
-    # Wir nutzen jetzt direkt TkinterDnD.Tk als Root
-    root = TkinterDnD.Tk()
-    
-    # Übergeben dnd_enabled=True hart, da wir es jetzt erzwingen
-    app = AppGUI(root, dnd_enabled=True)
-    
-    root.mainloop()
+    # Wir importieren die GUI erst jetzt, damit alle Libs sicher da sind
+    try:
+        from src.ui.gui import AppGUI
+        
+        # Wir nutzen jetzt direkt TkinterDnD.Tk als Root
+        root = TkinterDnD.Tk()
+        
+        # Übergeben dnd_enabled=True hart, da wir es jetzt erzwingen
+        app = AppGUI(root, dnd_enabled=True)
+        
+        root.mainloop()
+        
+    except Exception as e:
+        log.error(f"Fehler beim Starten der GUI: {e}")
+        print("Drücken Sie Enter zum Beenden...")
+        input()
+        sys.exit(1)
