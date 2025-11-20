@@ -1,26 +1,51 @@
 import sys
-import tkinter as tk
+import os
+import subprocess
 from pathlib import Path
-from src.utils.helpers import log
+import tkinter as tk
+from tkinter import messagebox
 
-# Pfad-Fix
+# Pfad-Fix für Importe
 sys.path.append(str(Path(__file__).parent))
 
-from src.ui.gui import AppGUI
+from src.core.environment import EnvironmentManager
+from src.utils.helpers import log
 
-# Versuche Drag & Drop Support zu laden
-try:
-    from tkinterdnd2 import TkinterDnD
-    DND_AVAILABLE = True
-except ImportError:
-    DND_AVAILABLE = False
-    log.warning("Drag & Drop Lib (tkinterdnd2) nicht gefunden. Feature deaktiviert.")
+def restart_script():
+    """Startet das Script neu, damit frisch installierte Module geladen werden können."""
+    log.info("Starte Anwendung neu...")
+    python = sys.executable
+    os.execl(python, python, *sys.argv)
 
 if __name__ == "__main__":
-    if DND_AVAILABLE:
-        root = TkinterDnD.Tk()
-    else:
-        root = tk.Tk()
+    # 1. ZWINGENDER Environment Check vor dem GUI Start
+    # Das hier läuft jetzt immer als erstes.
+    try:
+        env = EnvironmentManager()
+        project_root = Path(__file__).parent
         
-    app = AppGUI(root, dnd_enabled=DND_AVAILABLE)
+        # Prüft requirements.txt und installiert fehlendes (inkl. Ping Loop)
+        env.prepare_environment(project_root)
+        
+    except Exception as e:
+        log.error(f"Kritischer Fehler beim Environment-Setup: {e}")
+        input("Drücken Sie Enter zum Beenden...")
+        sys.exit(1)
+
+    # 2. Import der Drag & Drop Lib (jetzt sicher vorhanden)
+    try:
+        from tkinterdnd2 import TkinterDnD
+    except ImportError:
+        log.warning("Modul 'tkinterdnd2' wurde installiert, konnte aber nicht sofort geladen werden.")
+        restart_script()
+
+    # 3. GUI Start
+    from src.ui.gui import AppGUI
+    
+    # Wir nutzen jetzt direkt TkinterDnD.Tk als Root
+    root = TkinterDnD.Tk()
+    
+    # Übergeben dnd_enabled=True hart, da wir es jetzt erzwingen
+    app = AppGUI(root, dnd_enabled=True)
+    
     root.mainloop()
