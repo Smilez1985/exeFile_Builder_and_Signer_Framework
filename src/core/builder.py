@@ -26,7 +26,7 @@ class PyBuilder:
         """
         Führt PyInstaller mit den angegebenen Parametern aus.
         """
-        # FIX: Sicherstellen, dass app_name keine .exe Endung hat (vermeidet .exe.exe)
+        # FIX 1: Sicherstellen, dass app_name keine .exe Endung hat (vermeidet .exe.exe)
         clean_app_name = app_name
         if clean_app_name.lower().endswith(".exe"):
             clean_app_name = clean_app_name[:-4]
@@ -56,6 +56,12 @@ class PyBuilder:
         if clean:
             cmd.append("--clean")
             cmd.append("--noconfirm")
+            
+        # FIX 2: Hidden Import für YAML
+        # Das löst den ModuleNotFoundError: No module named 'yaml'
+        cmd.append("--hidden-import=yaml")
+        cmd.append("--hidden-import=yaml.loader")
+
 
         if icon_path and icon_path.exists():
             cmd.append(f"--icon={str(icon_path)}")
