@@ -5,4 +5,4 @@ tqdm==4.66.1
 requests==2.31.0
 tkinterdnd2==0.3.0
 pywin32==307
-pyyaml
+pyyaml==6.0.3
