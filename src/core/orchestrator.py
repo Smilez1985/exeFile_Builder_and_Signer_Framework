@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-# Importiere Module
+# Module
 from src.core.environment import EnvironmentManager
 from src.core.certs import CertificateManager
 from src.core.signer import AuthenticodeSigner
@@ -26,7 +26,7 @@ class BuildOrchestrator:
         self.env_manager.prepare_environment(project_root)
 
     def get_cert_tuple(self, config: dict) -> tuple[Path, Path]:
-        # (Logik für Zertifikate bleibt gleich)
+        # (Zertifikatslogik unverändert)
         mode = config.get("cert_mode", "auto")
         password = config.get("cert_password", "")
         
@@ -47,64 +47,52 @@ class BuildOrchestrator:
 
     def create_readme(self, output_dir: Path):
         try:
-            with open(output_dir / "README.txt", "w", encoding="utf-8") as f:
+            with open(output_dir / "ANLEITUNG_LESEN.txt", "w", encoding="utf-8") as f:
                 f.write("Bitte install_cert.bat als Administrator ausführen!\nDann Programm starten.")
         except: pass
 
-    def find_project_config(self, script_path: Path) -> Tuple[List[str], Path]:
+    def detect_config_from_assets(self, assets: List[str]) -> Tuple[List[str], Path, str]:
         """
-        Sucht intelligent nach einer Build-Config im Projektbaum des Users.
-        Gibt (Argumenten-Liste, Projekt-Root-Pfad) zurück.
+        Sucht in den vom User bereitgestellten Assets nach einer Config-Datei.
+        Rückgabe: (Argumente, ProjectRoot, ConfigFilePath)
         """
-        # Wir definieren Suchpfade relativ zum Script (z.B. orchestrator/main.py)
-        # 1. Gleicher Ordner
-        # 2. Ordner 'scripts' im Parent (../scripts)
-        # 3. Ordner 'config' im Parent (../config)
-        # 4. Parent Ordner selbst (../)
-        
-        candidates = [
-            script_path.parent,
-            script_path.parent.parent / "scripts",
-            script_path.parent.parent / "config",
-            script_path.parent.parent
-        ]
-        
-        for folder in candidates:
-            if not folder.exists(): continue
+        for asset_path in assets:
+            path_obj = Path(asset_path)
             
-            # Wir suchen nach Python-Dateien, die PYINSTALLER_CMD_ARGS enthalten
-            for py_file in folder.glob("*.py"):
-                if py_file.resolve() == script_path.resolve(): continue # Sich selbst überspringen
+            # Wir suchen nur nach .py Dateien in der Asset-Liste
+            if not path_obj.exists() or path_obj.suffix.lower() != ".py":
+                continue
+            
+            try:
+                # Schnell-Check: Enthält die Datei unser Keyword?
+                with open(path_obj, "r", encoding="utf-8", errors="ignore") as f:
+                    if "PYINSTALLER_CMD_ARGS" not in f.read():
+                        continue
                 
-                try:
-                    # Quick-Scan des Inhalts (Performance)
-                    with open(py_file, "r", encoding="utf-8", errors="ignore") as f:
-                        content = f.read()
+                log.info(f"🔧 Build-Config in Assets erkannt: {path_obj.name}")
+                
+                # Importieren
+                spec = importlib.util.spec_from_file_location("asset_config", str(path_obj))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                
+                if hasattr(mod, "PYINSTALLER_CMD_ARGS"):
+                    args = getattr(mod, "PYINSTALLER_CMD_ARGS")
                     
-                    if "PYINSTALLER_CMD_ARGS" in content:
-                        log.info(f"🔍 Konfiguration gefunden: {py_file.name}")
+                    # Root ermitteln: Wenn die Datei in 'scripts' liegt, ist Root eins drüber.
+                    # Sonst ist Root der Ordner der Datei.
+                    project_root = path_obj.parent
+                    if project_root.name in ["scripts", "config"]:
+                        project_root = project_root.parent
                         
-                        # Dynamischer Import
-                        spec = importlib.util.spec_from_file_location("ext_config", str(py_file))
-                        mod = importlib.util.module_from_spec(spec)
-                        spec.loader.exec_module(mod)
-                        
-                        if hasattr(mod, "PYINSTALLER_CMD_ARGS"):
-                            args = getattr(mod, "PYINSTALLER_CMD_ARGS")
-                            log.success("✅ Argumente erfolgreich geladen!")
-                            
-                            # Project Root ermitteln:
-                            # Wenn Config in /scripts/ liegt, ist Root vermutlich eins drüber.
-                            # Wenn Config im Root liegt, ist es der Ordner selbst.
-                            project_root = folder.parent if folder.name in ["scripts", "config", "orchestrator"] else folder
-                            
-                            return args, project_root
-                            
-                except Exception as e:
-                    log.debug(f"Fehler beim Lesen von {py_file}: {e}")
-                    continue
+                    log.success(f"✅ Konfiguration geladen! Root: {project_root}")
+                    return args, project_root, str(path_obj)
+                    
+            except Exception as e:
+                log.warning(f"Konnte Asset {path_obj.name} nicht als Config laden: {e}")
+                continue
         
-        return [], None
+        return [], None, None
 
     def run_full_pipeline(self, config: dict):
         log.info("=== START PIPELINE ===")
@@ -114,36 +102,53 @@ class BuildOrchestrator:
             log.error("Script nicht gefunden")
             return
 
-        # Environment Check (lädt Tools etc.)
         self.setup_environment(Path("."))
 
-        # Zertifikat
         try:
             pfx_path, cer_path = self.get_cert_tuple(config)
             cert_pass = config.get("cert_password", "")
         except Exception as e:
-            log.error(f"Zertifikats-Fehler: {e}")
+            log.error(f"Cert Fehler: {e}")
             return
 
-        # --- AUTO-DETECTION START ---
-        # Wir suchen nach der Config
-        config_args, project_root = self.find_project_config(script_input)
+        # --- LOGIK: CONFIG vs GUI ---
+        # Wir schauen in die Assets, die der User in die GUI gezogen hat
+        gui_assets = config.get("assets", [])
+        
+        config_args, project_root, config_file = self.detect_config_from_assets(gui_assets)
         
         exe_path = None
         
         if config_args:
-            # MODUS A: Config gefunden -> Nutze Goldstandard
-            log.info(f"Nutze externe Config. Root: {project_root}")
-            exe_path = self.builder.build_with_config(config_args, project_root)
-        else:
-            # MODUS B: Keine Config -> Nutze GUI Eingaben
-            log.info("Keine Projekt-Config gefunden. Nutze GUI-Settings.")
+            # MODUS A: Config (Goldstandard)
+            log.info("Starte Build mit externer Konfiguration...")
             
-            gui_assets = []
-            for item in config.get("assets", []):
+            # Falls der User NOCH MEHR Assets in der GUI hat (außer der Config), 
+            # fügen wir diese sicherheitshalber auch hinzu.
+            extra_assets = []
+            for item in gui_assets:
+                if item == config_file: continue # Config selbst nicht packen
+                
                 p = Path(item)
-                if p.is_file(): gui_assets.append(f"{item};.")
-                elif p.is_dir(): gui_assets.append(f"{item};{p.name}")
+                if p.is_file(): extra_assets.append(f"--add-data={item};.")
+                elif p.is_dir(): extra_assets.append(f"--add-data={item};{p.name}")
+            
+            if extra_assets:
+                log.info(f"Füge {len(extra_assets)} weitere Assets aus der GUI hinzu.")
+                config_args.extend(extra_assets)
+
+            # WICHTIG: Wir nutzen 'build_with_args' (aus dem vorherigen Update)
+            exe_path = self.builder.build_with_args(config_args, project_root)
+            
+        else:
+            # MODUS B: Standard GUI
+            log.info("Keine Config-Datei in den Assets gefunden. Nutze Standard-Modus.")
+            
+            clean_assets = []
+            for item in gui_assets:
+                p = Path(item)
+                if p.is_file(): clean_assets.append(f"{item};.")
+                elif p.is_dir(): clean_assets.append(f"{item};{p.name}")
 
             exe_path = self.builder.build_from_gui(
                 script_path=script_input,
@@ -151,12 +156,12 @@ class BuildOrchestrator:
                 icon_path=Path(config.get("icon_path")) if config.get("icon_path") else None,
                 console=config.get("console", True),
                 one_file=config.get("one_file", True),
-                add_data=gui_assets
+                add_data=clean_assets
             )
 
         if not exe_path: return
 
-        # SIGNIERUNG (Unverändert)
+        # SIGNIERUNG
         log.info("Warte auf Dateisystem...")
         time.sleep(2)
         
