@@ -7,9 +7,9 @@ from src.utils.helpers import log
 class PyBuilder:
     """
     Wrapper-Klasse für PyInstaller.
-    Unterstützt:
-    1. GUI-Modus (Argumente werden aus GUI-Optionen generiert).
-    2. Config-Modus (Argumente kommen fixfertig aus einer externen Konfigurationsdatei).
+    Unterstützt zwei Modi:
+    1. GUI-Modus: Baut Argumente aus Einzelparametern zusammen.
+    2. Config-Modus (Goldstandard): Verarbeitet eine externe Argumenten-Liste exakt wie vorgegeben.
     """
 
     def __init__(self):
@@ -18,38 +18,24 @@ class PyBuilder:
         self.work_dir = self.build_dir / "work"
         self.spec_dir = self.build_dir / "spec"
         
+        # Verzeichnisse leeren/erstellen
         for d in [self.dist_dir, self.work_dir, self.spec_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
     def _get_framework_paths(self) -> list:
-        """Framework erzwingt seine Ausgabe-Pfade (damit der Signer sie findet)."""
+        """Definiert, wo die Artefakte landen sollen (Framework-Hoheit)."""
         return [
             "--distpath", str(self.dist_dir.absolute()),
             "--workpath", str(self.work_dir.absolute()),
             "--specpath", str(self.spec_dir.absolute()),
         ]
 
-    def _run_process(self, cmd: list, cwd: Path = None) -> Path:
-        """Führt PyInstaller aus und gibt den Pfad zur EXE zurück."""
-        app_name = "Output"
-        
-        # Versuchen, den App-Namen aus den Argumenten zu fischen (für die Rückgabe)
-        if "--name" in cmd:
-            idx = cmd.index("--name")
-            if idx + 1 < len(cmd):
-                app_name = cmd[idx+1]
-        elif any(arg.startswith("--name=") for arg in cmd):
-            for arg in cmd:
-                if arg.startswith("--name="):
-                    app_name = arg.split("=", 1)[1]
-                    break
-        
-        # Bereinigung
-        if app_name.lower().endswith(".exe"):
-            app_name = app_name[:-4]
-
+    def _run_process(self, cmd: list, cwd: Path = None, app_name_hint: str = "Output") -> Path:
+        """Führt den Prozess aus und gibt den Pfad zur EXE zurück."""
         try:
-            log.debug(f"CMD (CWD={cwd or '.'}): {' '.join(cmd)}")
+            # Logging für Debugging
+            log.debug(f"CWD: {cwd or '.'}")
+            log.debug(f"CMD: {' '.join(cmd)}")
             
             process = subprocess.Popen(
                 cmd,
@@ -60,6 +46,7 @@ class PyBuilder:
                 cwd=str(cwd) if cwd else None
             )
 
+            # Echtzeit-Logging
             for line in process.stdout:
                 line = line.strip()
                 if line:
@@ -69,47 +56,70 @@ class PyBuilder:
             process.wait()
 
             if process.returncode == 0:
-                exe_path = self.dist_dir / f"{app_name}.exe"
+                # Wir versuchen, den Namen der EXE zu erraten oder nutzen den Hint
+                # Im Config-Modus steht der Name in der Liste (--name), das parsen wir im Wrapper
+                exe_path = self.dist_dir / f"{app_name_hint}.exe"
+                
                 if exe_path.exists():
-                    log.success(f"Build erfolgreich: {exe_path}")
+                    log.success(f"Build erfolgreich! Datei: {exe_path}")
                     return exe_path
-            
-            log.error(f"PyInstaller Fehler (Code {process.returncode})")
-            return None
+                else:
+                    log.error(f"PyInstaller fertig, aber Datei fehlt: {exe_path}")
+                    # Fallback: Manchmal heißt die Datei anders, wir listen das Verzeichnis
+                    found = list(self.dist_dir.glob("*.exe"))
+                    if found:
+                        log.info(f"Gefundene Datei: {found[0]}")
+                        return found[0]
+                    return None
+            else:
+                log.error(f"PyInstaller Fehler (Code {process.returncode})")
+                return None
 
         except Exception as e:
-            log.error(f"Builder Crash: {e}")
+            log.error(f"Kritischer Build-Fehler: {e}")
             return None
 
-    def build_with_args(self, pyinstaller_args: list, project_root: Path) -> Path:
+    def build_with_config(self, pyinstaller_args: list, project_root: Path) -> Path:
         """
-        PROFI-MODUS: Führt PyInstaller mit einer externen Liste aus.
-        """
-        log.info("Starte Build im Config-Modus...")
+        GOLDSTANDARD: Führt PyInstaller mit der exakten Liste aus der Config-Datei aus.
         
-        # Wir kombinieren: Python + PyInstaller + Framework-Pfad-Zwang + Externe Argumente
+        Args:
+            pyinstaller_args: Die Liste PYINSTALLER_CMD_ARGS aus der Datei.
+            project_root: Das Root-Verzeichnis des externen Projekts (für relative Pfade).
+        """
+        # App Name extrahieren (nur für den Dateinamen-Check am Ende)
+        app_name = "App"
+        if "--name" in pyinstaller_args:
+            idx = pyinstaller_args.index("--name")
+            if idx + 1 < len(pyinstaller_args):
+                app_name = pyinstaller_args[idx+1]
+        
+        log.info(f"Starte Config-Build für '{app_name}' im Kontext '{project_root}'...")
+
+        # Kommando: Python -> PyInstaller -> Framework-Pfade -> USER ARGS
         cmd = [sys.executable, "-m", "PyInstaller"] + self._get_framework_paths() + pyinstaller_args
         
-        return self._run_process(cmd, cwd=project_root)
+        return self._run_process(cmd, cwd=project_root, app_name_hint=app_name)
 
     def build_from_gui(self, script_path: Path, app_name: str, icon_path: Path = None, 
                        one_file: bool = True, console: bool = True, clean: bool = True,
                        add_data: list = None) -> Path:
-        """
-        STANDARD-MODUS: Baut Argumente aus der GUI zusammen.
-        """
-        log.info(f"Starte Build im GUI-Modus für '{app_name}'...")
+        """Standard GUI-Modus (Fallback)."""
         
-        # Name bereinigen
-        if app_name.lower().endswith(".exe"): app_name = app_name[:-4]
+        if app_name.lower().endswith(".exe"):
+            app_name = app_name[:-4]
 
+        log.info(f"Starte GUI-Build für '{app_name}'...")
+        
         args = [str(script_path), f"--name={app_name}"]
         args.append("--onefile" if one_file else "--onedir")
         args.append("--console" if console else "--noconsole")
-        if clean: args.extend(["--clean", "--noconfirm"])
         
-        # Sicherheits-Netz für GUI-User (die keine Config haben)
-        args.extend(["--hidden-import=yaml", "--hidden-import=win32api"])
+        if clean:
+            args.extend(["--clean", "--noconfirm"])
+            
+        # Standard Hidden Imports für GUI-Nutzer
+        args.extend(["--hidden-import=yaml", "--hidden-import=win32api", "--hidden-import=win32con"])
 
         if icon_path and icon_path.exists():
             args.append(f"--icon={str(icon_path)}")
@@ -120,7 +130,7 @@ class PyBuilder:
 
         cmd = [sys.executable, "-m", "PyInstaller"] + self._get_framework_paths() + args
         
-        return self._run_process(cmd)
+        return self._run_process(cmd, app_name_hint=app_name)
 
     def cleanup(self):
         try:
