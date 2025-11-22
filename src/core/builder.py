@@ -3,6 +3,7 @@ import sys
 import shutil
 from pathlib import Path
 from src.utils.helpers import log
+import time # Importieren, falls es in den Orchestrator muss, hier aber nicht benötigt
 
 class PyBuilder:
     """
@@ -57,10 +58,11 @@ class PyBuilder:
             cmd.append("--clean")
             cmd.append("--noconfirm")
             
-        # FIX 2: Hidden Import für YAML
-        # Das löst den ModuleNotFoundError: No module named 'yaml'
-        cmd.append("--hidden-import=yaml")
+        # FIX 2: Hidden Imports erzwingen (pyyaml und pywin32)
+        cmd.append("--hidden-import=yaml") 
         cmd.append("--hidden-import=yaml.loader")
+        cmd.append("--hidden-import=win32api") # Notwendige Module für PyWin32
+        cmd.append("--hidden-import=win32con")
 
 
         if icon_path and icon_path.exists():
