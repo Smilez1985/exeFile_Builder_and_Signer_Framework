@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 import sys
 
-# Importiere Module
+# Module
 from src.core.environment import EnvironmentManager
 from src.core.certs import CertificateManager
 from src.core.signer import AuthenticodeSigner
@@ -24,154 +24,83 @@ class BuildOrchestrator:
         self.env_manager.prepare_environment(project_root)
 
     def get_cert_tuple(self, config: dict) -> tuple[Path, Path]:
-        """
-        Gibt PFX (Privat) UND CER (Öffentlich) zurück.
-        """
         mode = config.get("cert_mode", "auto")
         password = config.get("cert_password", "")
         
         if mode == "file":
-            pfx_path = Path(config.get("pfx_path"))
-            if not pfx_path.exists():
-                raise FileNotFoundError(f"PFX nicht gefunden: {pfx_path}")
-            
-            cer_path = pfx_path.with_suffix(".cer")
-            if not cer_path.exists():
-                log.warning("Bei externer PFX wurde keine .cer Datei gefunden. Auto-Install Script wird evtl. nicht funktionieren.")
-                return pfx_path, None
-                
-            return pfx_path, cer_path
+            pfx = Path(config.get("pfx_path"))
+            if not pfx.exists(): raise FileNotFoundError("PFX fehlt")
+            cer = pfx.with_suffix(".cer")
+            return pfx, (cer if cer.exists() else None)
         else:
             name = config.get("cert_name", "MyCert")
-            use_openssl = config.get("use_openssl", False)
+            # Prüfen ob schon da
+            pfx = self.cert_manager.store_path / f"{name}.pfx"
+            cer = self.cert_manager.store_path / f"{name}.cer"
+            if pfx.exists():
+                log.info(f"♻️ Zertifikat aus Cache: {name}")
+                return pfx, cer
             
-            # 1. Suche im Store
-            pfx_path = self.cert_manager.store_path / f"{name}.pfx"
-            cer_path = self.cert_manager.store_path / f"{name}.cer"
-
-            if pfx_path.exists() and cer_path.exists():
-                log.info(f"♻️ Nutze Cache Zertifikat: {name}")
-                return pfx_path, cer_path
-            
-            log.info(f"✨ Erstelle neues Zertifikat: {name}")
-            return self.cert_manager.create_certificate(name, password, use_openssl=use_openssl)
+            log.info(f"✨ Erstelle Zertifikat: {name}")
+            return self.cert_manager.create_certificate(name, password, use_openssl=config.get("use_openssl", False))
 
     def create_readme(self, output_dir: Path):
-        """Erstellt eine DAU-freundliche Anleitung für den Empfänger."""
-        readme_path = output_dir / "ANLEITUNG_LESEN.txt"
-        content = """========================================================================
-             WICHTIGE INSTALLATIONS-HINWEISE
-========================================================================
-
-Damit dieses Programm auf Ihrem Computer ohne Warnmeldungen läuft, 
-muss einmalig das beiliegende Sicherheitszertifikat installiert werden.
-
-SCHRITT 1: ZERTIFIKAT INSTALLIEREN
-----------------------------------
-1. Finden Sie in diesem Ordner die Datei "install_cert.bat".
-2. Klicken Sie mit der RECHTEN Maustaste darauf.
-3. Wählen Sie "Als Administrator ausführen".
-4. Bestätigen Sie eventuelle Fenster mit "Ja" oder "OK".
-
--> Es erscheint kurz ein schwarzes Fenster, das den Erfolg bestätigt.
-
-
-SCHRITT 2: PROGRAMM STARTEN
----------------------------
-Jetzt können Sie das Programm (die .exe Datei mit dem Icon) 
-ganz normal mit einem Doppelklick starten.
-
-Viel Spaß!
-"""
         try:
-            with open(readme_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            log.info(f"   -> Anleitung erstellt: {readme_path.name}")
-        except Exception as e:
-            log.warning(f"Konnte Anleitung nicht erstellen: {e}")
+            with open(output_dir / "README.txt", "w", encoding="utf-8") as f:
+                f.write("Bitte install_cert.bat als Administrator ausführen!\nDann Programm starten.")
+        except: pass
 
     def run_full_pipeline(self, config: dict):
-        log.info("=== STARTING BUILD PIPELINE ===")
-
-        script_path = Path(config.get("script_file"))
-        if not script_path.exists():
-            log.error(f"Script fehlt: {script_path}")
+        log.info("=== START PIPELINE ===")
+        
+        # 1. Checks
+        script = Path(config.get("script_file"))
+        if not script.exists():
+            log.error("Script nicht gefunden")
             return
-
+            
         self.setup_environment(Path("."))
 
-        # 1. Zertifikat
+        # 2. Zertifikat
         try:
             pfx_path, cer_path = self.get_cert_tuple(config)
             cert_pass = config.get("cert_password", "")
         except Exception as e:
-            log.error(f"Zertifikats-Fehler: {e}")
+            log.error(f"Cert Fehler: {e}")
             return
 
-        # 2. Assets
-        raw_assets = config.get("assets", [])
-        formatted_assets = []
-        for asset in raw_assets:
-            path_obj = Path(asset)
-            if not path_obj.exists(): continue
-            
-            if path_obj.is_file():
-                formatted_assets.append(f"{asset};.")
-            elif path_obj.is_dir():
-                formatted_assets.append(f"{asset};{path_obj.name}")
+        # 3. Assets vorbereiten (GUI -> Builder Format)
+        assets = []
+        for item in config.get("assets", []):
+            p = Path(item)
+            if p.is_file(): assets.append(f"{item};.")
+            elif p.is_dir(): assets.append(f"{item};{p.name}")
 
-        # 3. Build
+        # 4. BUILD (Hier passiert die Magie mit den hardcoded Imports)
         exe_path = self.builder.build(
-            script_path=script_path,
-            app_name=config.get("app_name", "MyApp"),
+            script_path=script,
+            app_name=config.get("app_name", "App"),
             icon_path=Path(config.get("icon_path")) if config.get("icon_path") else None,
             console=config.get("console", True),
             one_file=config.get("one_file", True),
-            add_data=formatted_assets
+            add_data=assets
         )
 
-        if not exe_path:
-            return
+        if not exe_path: return
 
-        # --- PAUSE FÜR DATEISYSTEM (Virenscanner etc.) ---
-        log.info("Warte 2 Sekunden auf Dateifreigabe...")
+        # 5. SIGN
+        log.info("Warte kurz auf Dateisystem...")
         time.sleep(2)
-
-        # 4. Sign
-        log.info("--- Signierung ---")
-        success = self.signer.sign_exe(exe_path, pfx_path, cert_pass)
         
-        if success:
-            # --- DISTRIBUTION ---
-            dist_dir = exe_path.parent
+        if self.signer.sign_exe(exe_path, pfx_path, cert_pass):
+            dist = exe_path.parent
+            if cer_path:
+                try: shutil.copy(cer_path, dist / cer_path.name)
+                except: pass
+                self.cert_manager.create_install_script(dist, pfx_path.stem, cer_path)
+            self.create_readme(dist)
             
-            log.info("📦 Erstelle Distributions-Paket...")
-            
-            # A) CER kopieren
-            final_cer_path = None
-            if cer_path and cer_path.exists():
-                try:
-                    final_cer_path = dist_dir / cer_path.name
-                    shutil.copy(cer_path, final_cer_path)
-                    log.info(f"   -> Public Key kopiert: {final_cer_path.name}")
-                except Exception as e:
-                    log.warning(f"Konnte CER nicht kopieren: {e}")
-
-            # B) Install-Script erstellen
-            if final_cer_path:
-                self.cert_manager.create_install_script(dist_dir, pfx_path.stem, final_cer_path)
-                log.info(f"   -> Installer Script erstellt in: {dist_dir}")
-            
-            # C) Anleitung erstellen
-            self.create_readme(dist_dir)
-
-            log.success("✅ DONE!")
-            print(f"\n[DISTRIBUTION - DIESEN ORDNER WEITERGEBEN]")
-            print(f" 📂 {dist_dir.absolute()}")
-            print(f"     ├── {exe_path.name}")
-            if final_cer_path:
-                print(f"     ├── {final_cer_path.name}")
-                print(f"     ├── install_cert.bat")
-                print(f"     └── ANLEITUNG_LESEN.txt")
+            log.success("✅ DONE! Fertiges Paket in:")
+            print(f" -> {dist.absolute()}")
         else:
-            log.error("❌ Signatur fehlgeschlagen.")
+            log.error("Signatur fehlgeschlagen.")
