@@ -26,7 +26,6 @@ class BuildOrchestrator:
         self.env_manager.prepare_environment(project_root)
 
     def get_cert_tuple(self, config: dict) -> tuple[Path, Path]:
-        # (Zertifikatslogik unverändert)
         mode = config.get("cert_mode", "auto")
         password = config.get("cert_password", "")
         
@@ -59,19 +58,16 @@ class BuildOrchestrator:
         for asset_path in assets:
             path_obj = Path(asset_path)
             
-            # Wir suchen nur nach .py Dateien in der Asset-Liste
             if not path_obj.exists() or path_obj.suffix.lower() != ".py":
                 continue
             
             try:
-                # Schnell-Check: Enthält die Datei unser Keyword?
                 with open(path_obj, "r", encoding="utf-8", errors="ignore") as f:
                     if "PYINSTALLER_CMD_ARGS" not in f.read():
                         continue
                 
                 log.info(f"🔧 Build-Config in Assets erkannt: {path_obj.name}")
                 
-                # Importieren
                 spec = importlib.util.spec_from_file_location("asset_config", str(path_obj))
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
@@ -79,8 +75,6 @@ class BuildOrchestrator:
                 if hasattr(mod, "PYINSTALLER_CMD_ARGS"):
                     args = getattr(mod, "PYINSTALLER_CMD_ARGS")
                     
-                    # Root ermitteln: Wenn die Datei in 'scripts' liegt, ist Root eins drüber.
-                    # Sonst ist Root der Ordner der Datei.
                     project_root = path_obj.parent
                     if project_root.name in ["scripts", "config"]:
                         project_root = project_root.parent
@@ -112,7 +106,6 @@ class BuildOrchestrator:
             return
 
         # --- LOGIK: CONFIG vs GUI ---
-        # Wir schauen in die Assets, die der User in die GUI gezogen hat
         gui_assets = config.get("assets", [])
         
         config_args, project_root, config_file = self.detect_config_from_assets(gui_assets)
@@ -123,11 +116,9 @@ class BuildOrchestrator:
             # MODUS A: Config (Goldstandard)
             log.info("Starte Build mit externer Konfiguration...")
             
-            # Falls der User NOCH MEHR Assets in der GUI hat (außer der Config), 
-            # fügen wir diese sicherheitshalber auch hinzu.
             extra_assets = []
             for item in gui_assets:
-                if item == config_file: continue # Config selbst nicht packen
+                if item == config_file: continue 
                 
                 p = Path(item)
                 if p.is_file(): extra_assets.append(f"--add-data={item};.")
@@ -137,8 +128,8 @@ class BuildOrchestrator:
                 log.info(f"Füge {len(extra_assets)} weitere Assets aus der GUI hinzu.")
                 config_args.extend(extra_assets)
 
-            # WICHTIG: Wir nutzen 'build_with_args' (aus dem vorherigen Update)
-            exe_path = self.builder.build_with_args(config_args, project_root)
+            # KORREKTUR: Hier stand vorher build_with_args, muss build_with_config heißen
+            exe_path = self.builder.build_with_config(config_args, project_root)
             
         else:
             # MODUS B: Standard GUI
