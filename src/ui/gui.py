@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import sys
 import threading
+import json
+import os
 from pathlib import Path
 
 # Framework Imports
@@ -31,16 +33,27 @@ class ConsoleRedirector:
         sys.__stdout__.flush()
 
 class AppGUI:
+    SETTINGS_FILE = Path("settings.json")
+
     def __init__(self, root, dnd_enabled=False):
         self.root = root
         self.dnd_enabled = dnd_enabled
-        self.root.title("ExeFile Builder - PRO Edition")
-        self.root.geometry("1000x900")
+        self.root.title("ExeFile Builder - Enterprise Edition")
+        self.root.geometry("1000x950")
         self.root.configure(bg="#2b2b2b")
+        
+        # Protokoll für das Schließen des Fensters binden (Auto-Save)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
         self.orchestrator = BuildOrchestrator()
         self._setup_styles()
         self._create_widgets()
-        if self.dnd_enabled: self._setup_dnd()
+        
+        if self.dnd_enabled: 
+            self._setup_dnd()
+
+        # Historie laden
+        self.load_settings()
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -72,21 +85,18 @@ class AppGUI:
         self._create_file_entry(file_frame, "Start Script (.py):", "script_path", 0, "*.py")
         self._create_file_entry(file_frame, "Icon (.ico):", "icon_path", 1, "*.ico")
 
-        # 2. ASSETS (NEU: LISTBOX)
-        asset_frame = ttk.LabelFrame(main_frame, text=" 2. Zusatz-Dateien & Ordner (z.B. configs, docker) ", padding=15)
+        # 2. ASSETS
+        asset_frame = ttk.LabelFrame(main_frame, text=" 2. Zusatz-Dateien (Configs, Assets) ", padding=15)
         asset_frame.pack(fill='x', pady=(0, 15))
         
-        # Listbox Container
         list_frame = ttk.Frame(asset_frame)
         list_frame.pack(fill='x', expand=True)
         
         self.list_assets = tk.Listbox(list_frame, height=5, bg="#3c3c3c", fg="#ffffff", selectbackground="#007acc", borderwidth=0)
         self.list_assets.pack(side='left', fill='x', expand=True, padx=(0, 5))
         
-        # Buttons rechts daneben
         btn_box = ttk.Frame(list_frame)
         btn_box.pack(side='right', fill='y')
-        
         ttk.Button(btn_box, text="➕ Ordner", command=self._add_folder, width=12).pack(pady=2)
         ttk.Button(btn_box, text="➕ Datei", command=self._add_file, width=12).pack(pady=2)
         ttk.Button(btn_box, text="➖ Löschen", command=self._remove_asset, width=12).pack(pady=2)
@@ -94,14 +104,18 @@ class AppGUI:
         # 3. OPTIONS
         config_frame = ttk.LabelFrame(main_frame, text=" 3. Build Optionen ", padding=15)
         config_frame.pack(fill='x', pady=(0, 15))
+        
+        # Grid Layout für Optionen
         ttk.Label(config_frame, text="App Name:").grid(row=0, column=0, sticky='w')
         self.entry_app_name = ttk.Entry(config_frame, width=30)
         self.entry_app_name.insert(0, "MyTool")
-        self.entry_app_name.grid(row=0, column=1, padx=10)
+        self.entry_app_name.grid(row=0, column=1, padx=10, sticky='w')
+        
         self.var_onefile = tk.BooleanVar(value=True)
         ttk.Checkbutton(config_frame, text="OneFile", variable=self.var_onefile).grid(row=0, column=2, padx=10)
+        
         self.var_console = tk.BooleanVar(value=True)
-        ttk.Checkbutton(config_frame, text="Konsole", variable=self.var_console).grid(row=0, column=3, padx=10)
+        ttk.Checkbutton(config_frame, text="Konsole anzeigen", variable=self.var_console).grid(row=0, column=3, padx=10)
 
         # 4. SIGNING
         cert_group = ttk.LabelFrame(main_frame, text=" 4. Signatur ", padding=15)
@@ -109,6 +123,7 @@ class AppGUI:
         self.notebook = ttk.Notebook(cert_group)
         self.notebook.pack(fill='both', expand=True)
         
+        # Tab 1: Auto
         tab_auto = ttk.Frame(self.notebook, padding=15)
         self.notebook.add(tab_auto, text="Automatisch / Cache")
         ttk.Label(tab_auto, text="Zertifikats-Name:").grid(row=0, column=0)
@@ -116,15 +131,16 @@ class AppGUI:
         self.entry_cert_name.insert(0, "MyCert")
         self.entry_cert_name.grid(row=0, column=1, padx=10)
         
+        # Tab 2: File (mit Smart Default Path)
         tab_file = ttk.Frame(self.notebook, padding=15)
         self.notebook.add(tab_file, text="PFX Datei")
-        self._create_file_entry(tab_file, "PFX Pfad:", "pfx_path", 0, "*.pfx")
+        # Hier übergeben wir ein Flag 'is_cert=True' für die intelligente Pfadwahl
+        self._create_file_entry(tab_file, "PFX Pfad:", "pfx_path", 0, "*.pfx", is_cert=True)
 
         pass_frame = ttk.Frame(cert_group, padding=(15,5))
         pass_frame.pack(fill='x')
         ttk.Label(pass_frame, text="Passwort:").pack(side='left')
         self.entry_cert_pass = ttk.Entry(pass_frame, width=20, show="*")
-        self.entry_cert_pass.insert(0, "123456")
         self.entry_cert_pass.pack(side='left', padx=10)
         self.var_openssl = tk.BooleanVar(value=False)
         ttk.Checkbutton(pass_frame, text="OpenSSL nutzen", variable=self.var_openssl).pack(side='right')
@@ -132,27 +148,44 @@ class AppGUI:
         # ACTION
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill='x', pady=10)
-        ttk.Button(btn_frame, text="🚀 START BUILD & SIGN", command=self.start_build, width=30).pack(side='left')
-        ttk.Button(btn_frame, text="EXIT", command=self.root.quit).pack(side='right')
+        ttk.Button(btn_frame, text="🚀 SPEICHERN & STARTEN", command=self.start_build, width=30).pack(side='left')
+        ttk.Button(btn_frame, text="EXIT", command=self.on_close).pack(side='right')
 
         self.txt_console = tk.Text(main_frame, bg="#1e1e1e", fg="#00ff00", height=8, font=("Consolas", 9), state='disabled')
         self.txt_console.pack(fill='both', expand=True)
         sys.stdout = ConsoleRedirector(self.txt_console)
         sys.stderr = ConsoleRedirector(self.txt_console)
 
-    def _create_file_entry(self, parent, label, attr, row, ftype):
+    def _create_file_entry(self, parent, label, attr, row, ftype, is_cert=False):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky='w', pady=5)
         e = ttk.Entry(parent, width=50)
         e.grid(row=row, column=1, padx=10)
         setattr(self, f"entry_{attr}", e)
-        ttk.Button(parent, text="📂", width=4, command=lambda: self._browse_file(e, ftype)).grid(row=row, column=2)
+        # Lambda bindet is_cert Parameter
+        ttk.Button(parent, text="📂", width=4, command=lambda: self._browse_file(e, ftype, is_cert)).grid(row=row, column=2)
 
-    def _browse_file(self, entry, ftype):
-        f = filedialog.askopenfilename(filetypes=[("File", ftype),("All","*.*")])
+    def _browse_file(self, entry, ftype, is_cert=False):
+        # Smarte Pfad-Wahl
+        initial_dir = None
+        
+        # 1. Wenn schon was drin steht, nimm dessen Ordner
+        current_val = entry.get()
+        if current_val and Path(current_val).parent.exists():
+            initial_dir = Path(current_val).parent
+        # 2. Wenn es ein Zertifikat ist, geh in den certs_store
+        elif is_cert:
+            store_path = Path("certs_store")
+            if store_path.exists():
+                initial_dir = store_path.absolute()
+        
+        f = filedialog.askopenfilename(
+            filetypes=[("File", ftype),("All","*.*")],
+            initialdir=initial_dir
+        )
         if f:
-            entry.delete(0, 'end'); entry.insert(0, f)
+            entry.delete(0, 'end')
+            entry.insert(0, f)
 
-    # --- ASSET MANAGEMENT ---
     def _add_folder(self):
         d = filedialog.askdirectory()
         if d: self.list_assets.insert('end', d)
@@ -170,11 +203,8 @@ class AppGUI:
             path = event.data.strip("{}"); entry.delete(0,'end'); entry.insert(0, path)
         
         def drop_list(event):
-            # TkinterDnD liefert manchmal Liste als "{Pfad 1} {Pfad 2}" oder "Pfad1 Pfad2"
-            # Wir nutzen splitlist, um das sauber zu trennen
             files = self.root.tk.splitlist(event.data)
-            for f in files:
-                self.list_assets.insert('end', f)
+            for f in files: self.list_assets.insert('end', f)
 
         self.entry_script_path.drop_target_register(DND_FILES)
         self.entry_script_path.dnd_bind('<<Drop>>', lambda e: drop_generic(e, self.entry_script_path))
@@ -182,18 +212,95 @@ class AppGUI:
         self.list_assets.drop_target_register(DND_FILES)
         self.list_assets.dnd_bind('<<Drop>>', drop_list)
 
+    # --- PERSISTENCE LOGIK (SAVE/LOAD) ---
+    
+    def load_settings(self):
+        """Lädt Einstellungen aus JSON und füllt die GUI."""
+        if not self.SETTINGS_FILE.exists():
+            return
+
+        try:
+            with open(self.SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            # Text Felder
+            self._set_entry(self.entry_script_path, data.get("script_path"))
+            self._set_entry(self.entry_icon_path, data.get("icon_path"))
+            self._set_entry(self.entry_app_name, data.get("app_name"))
+            self._set_entry(self.entry_cert_name, data.get("cert_name"))
+            self._set_entry(self.entry_pfx_path, data.get("pfx_path"))
+            
+            # Passwort (Optional, falls gewünscht)
+            if data.get("cert_password"):
+                self._set_entry(self.entry_cert_pass, data.get("cert_password"))
+
+            # Checkboxen
+            self.var_onefile.set(data.get("onefile", True))
+            self.var_console.set(data.get("console", True))
+            self.var_openssl.set(data.get("openssl", False))
+            
+            # Assets Listbox
+            self.list_assets.delete(0, 'end')
+            for asset in data.get("assets", []):
+                self.list_assets.insert('end', asset)
+                
+            # Tab Auswahl
+            tab_index = data.get("selected_tab", 0)
+            if tab_index < self.notebook.index("end"):
+                self.notebook.select(tab_index)
+                
+            log.info("Einstellungen wiederhergestellt.")
+
+        except Exception as e:
+            log.warning(f"Konnte Einstellungen nicht laden: {e}")
+
+    def save_settings(self):
+        """Speichert den aktuellen GUI Zustand."""
+        data = {
+            "script_path": self.entry_script_path.get(),
+            "icon_path": self.entry_icon_path.get(),
+            "app_name": self.entry_app_name.get(),
+            "onefile": self.var_onefile.get(),
+            "console": self.var_console.get(),
+            "cert_name": self.entry_cert_name.get(),
+            "pfx_path": self.entry_pfx_path.get(),
+            "cert_password": self.entry_cert_pass.get(),
+            "openssl": self.var_openssl.get(),
+            "assets": self.list_assets.get(0, 'end'),
+            "selected_tab": self.notebook.index(self.notebook.select())
+        }
+        
+        try:
+            with open(self.SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+            # log.info("Einstellungen gespeichert.")
+        except Exception as e:
+            log.error(f"Fehler beim Speichern der Settings: {e}")
+
+    def _set_entry(self, entry, value):
+        if value:
+            entry.delete(0, 'end')
+            entry.insert(0, value)
+
+    def on_close(self):
+        """Wird beim Beenden aufgerufen."""
+        self.save_settings()
+        self.root.destroy()
+
     def start_build(self):
+        # Erst speichern, dann bauen!
+        self.save_settings()
+        
         tab = self.notebook.index(self.notebook.select())
         mode = "auto" if tab == 0 else "file"
         
-        # Assets einsammeln
         assets = self.list_assets.get(0, 'end')
 
         config = {
             "script_file": self.entry_script_path.get(),
             "app_name": self.entry_app_name.get(),
             "icon_path": self.entry_icon_path.get(),
-            "assets": list(assets), # Liste übergeben
+            "assets": list(assets),
             "console": self.var_console.get(),
             "one_file": self.var_onefile.get(),
             "cert_mode": mode,
