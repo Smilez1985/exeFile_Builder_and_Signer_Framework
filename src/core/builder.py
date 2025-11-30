@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import shutil
+import os
 from pathlib import Path
 from src.utils.helpers import log
 
@@ -30,60 +31,108 @@ class PyBuilder:
             "--specpath", str(self.spec_dir.absolute()),
         ]
 
+    def _sanitize_args(self, args: list, project_root: Path) -> list:
+        """
+        Wandelt relative Pfade in Argumenten in absolute Pfade um.
+        Löst das Problem, dass PyInstaller Pfade relativ zum Spec-Ordner sucht.
+        """
+        sanitized = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            
+            # --- FIX: --add-data "src;dest" ---
+            if arg == "--add-data" and i + 1 < len(args):
+                val = args[i+1]
+                if os.pathsep in val:
+                    src, dest = val.split(os.pathsep, 1)
+                    # Wenn src relativ ist, machen wir es absolut zum Projekt-Root
+                    src_path = Path(src)
+                    if not src_path.is_absolute():
+                        abs_src = (project_root / src).resolve()
+                        val = f"{abs_src}{os.pathsep}{dest}"
+                        log.debug(f"Pfad korrigiert: {src} -> {abs_src}")
+                
+                sanitized.append(arg)
+                sanitized.append(val)
+                i += 2
+                continue
+
+            # --- FIX: --add-data="src;dest" ---
+            elif arg.startswith("--add-data="):
+                prefix, val = arg.split("=", 1)
+                if os.pathsep in val:
+                    src, dest = val.split(os.pathsep, 1)
+                    src_path = Path(src)
+                    if not src_path.is_absolute():
+                        abs_src = (project_root / src).resolve()
+                        arg = f"{prefix}={abs_src}{os.pathsep}{dest}"
+                        log.debug(f"Pfad korrigiert: {src} -> {abs_src}")
+                sanitized.append(arg)
+                i += 1
+                continue
+
+            # --- FIX: --icon ---
+            elif arg.startswith("--icon="):
+                prefix, val = arg.split("=", 1)
+                icon_path = Path(val)
+                if not icon_path.is_absolute():
+                    abs_icon = (project_root / val).resolve()
+                    arg = f"{prefix}={abs_icon}"
+                sanitized.append(arg)
+                i += 1
+                continue
+            
+            # Argument unverändert übernehmen
+            sanitized.append(arg)
+            i += 1
+            
+        return sanitized
+
     def _run_process(self, cmd: list, cwd: Path = None, app_name_hint: str = "Output") -> Path:
         """Führt den Prozess aus und gibt den Pfad zur EXE zurück."""
-        captured_logs = []  # Puffer für ALLE Ausgaben (für Fehlerdiagnose)
+        captured_logs = []
 
         try:
-            # Logging für Debugging
             log.debug(f"CWD: {cwd or '.'}")
-            log.debug(f"CMD: {' '.join(cmd)}")
+            # log.debug(f"CMD: {' '.join(cmd)}") # Kann sehr lang sein
             
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, # Wir leiten Fehler in den normalen Strom um
+                stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
                 cwd=str(cwd) if cwd else None
             )
 
-            # Echtzeit-Logging & Pufferung
             for line in process.stdout:
                 line = line.strip()
                 if line:
-                    captured_logs.append(line) # Immer speichern!
-                    
-                    # Für den User filtern wir im Erfolgsfall, um Spam zu vermeiden
+                    captured_logs.append(line)
                     if any(x in line for x in ["Error", "WARNING", "Building", "Copying", "Traceback"]):
                         log.debug(f"[PyInstaller] {line}")
 
             process.wait()
 
             if process.returncode == 0:
-                # ERFOLGSFALL
-                # Wir versuchen, den Namen der EXE zu erraten oder nutzen den Hint
                 exe_path = self.dist_dir / f"{app_name_hint}.exe"
-                
                 if exe_path.exists():
                     log.success(f"Build erfolgreich! Datei: {exe_path}")
                     return exe_path
                 else:
                     log.error(f"PyInstaller lief durch, aber Datei fehlt: {exe_path}")
-                    # Fallback: Liste Verzeichnis
+                    # Fallback Suche
                     found = list(self.dist_dir.glob("*.exe"))
                     if found:
                         log.info(f"Gefundene Datei: {found[0]}")
                         return found[0]
                     return None
             else:
-                # FEHLERFALL: CRASH DUMP
                 log.error(f"PyInstaller abgebrochen (Exit Code {process.returncode})")
                 log.error("================ ERROR LOG START ================")
-                # Wir geben die letzten 50 Zeilen aus (meist reicht das), oder alles wenn kürzer
-                start_index = max(0, len(captured_logs) - 100)
+                start_index = max(0, len(captured_logs) - 50) # Letzte 50 Zeilen
                 for i in range(start_index, len(captured_logs)):
-                    # Wir nutzen print direkt oder log.error ohne Timestamp Prefix für Lesbarkeit
                     print(f"    > {captured_logs[i]}")
                 log.error("================ ERROR LOG ENDE =================")
                 return None
@@ -95,9 +144,6 @@ class PyBuilder:
     def build_with_config(self, pyinstaller_args: list, project_root: Path) -> Path:
         """
         GOLDSTANDARD: Führt PyInstaller mit der exakten Liste aus der Config-Datei aus.
-        Args:
-            pyinstaller_args: Die Liste PYINSTALLER_CMD_ARGS aus der Datei.
-            project_root: Das Root-Verzeichnis des externen Projekts (für relative Pfade).
         """
         # App Name extrahieren
         app_name = "App"
@@ -108,8 +154,11 @@ class PyBuilder:
         
         log.info(f"Starte Config-Build für '{app_name}' im Kontext '{project_root}'...")
 
-        # Kommando: Python -> PyInstaller -> Framework-Pfade -> USER ARGS
-        cmd = [sys.executable, "-m", "PyInstaller"] + self._get_framework_paths() + pyinstaller_args
+        # FIX: Argumente bereinigen (Pfade absolut machen)
+        clean_args = self._sanitize_args(pyinstaller_args, project_root)
+
+        # Kommando bauen
+        cmd = [sys.executable, "-m", "PyInstaller"] + self._get_framework_paths() + clean_args
         
         return self._run_process(cmd, cwd=project_root, app_name_hint=app_name)
 
@@ -130,7 +179,6 @@ class PyBuilder:
         if clean:
             args.extend(["--clean", "--noconfirm"])
             
-        # Standard Hidden Imports
         args.extend(["--hidden-import=yaml", "--hidden-import=win32api", "--hidden-import=win32con"])
 
         if icon_path and icon_path.exists():
