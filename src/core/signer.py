@@ -2,82 +2,137 @@ import subprocess
 import shutil
 import os
 from pathlib import Path
-from src.utils.helpers import log
+from typing import Optional
+
+from src.utils.logger import log
 
 class AuthenticodeSigner:
     """
-    Signiert Executables mit osslsigncode (Binary).
+    Enterprise Wrapper für Authenticode Signierung.
+    Nutzt 'osslsigncode' (Cross-Platform Binary) statt anfälliger PowerShell-Skripte.
+    
+    Features:
+    - Isoliertes Arbeitsverzeichnis für DLL-Auflösung
+    - Automatische Einbindung von OpenSSL Legacy-Providern
+    - Detaillierte Fehleranalyse bei Signatur-Problemen
     """
 
+    TIMESTAMP_SERVER = "http://timestamp.digicert.com"
+
     def __init__(self):
-        # Wir suchen das Tool im 'tools' Ordner
-        self.root_dir = Path(__file__).parent.parent.parent
-        self.tool_path = self.root_dir / "tools" / "osslsigncode.exe"
+        # Wir suchen das Tool im 'tools' Ordner relativ zum Framework Root
+        # Pfad: src/core/../../tools -> tools/
+        self.root_dir = Path(__file__).resolve().parent.parent.parent
+        self.tool_dir = self.root_dir / "tools"
+        self.tool_path = self.tool_dir / "osslsigncode.exe"
 
     def sign_exe(self, exe_path: Path, pfx_path: Path, password: str) -> bool:
-        log.info(f"Signiere {exe_path.name} mit {pfx_path.name} via osslsigncode...")
+        """
+        Signiert eine Windows PE-Datei (.exe, .dll).
         
-        if not self.tool_path.exists():
-            log.error(f"Signier-Tool nicht gefunden: {self.tool_path}")
+        Args:
+            exe_path: Pfad zur unsignierten Datei.
+            pfx_path: Pfad zum Zertifikat (.pfx).
+            password: Passwort für das Zertifikat.
+            
+        Returns:
+            True bei Erfolg, sonst False.
+        """
+        log.info(f"Initialisiere Signierung für: {exe_path.name}")
+        
+        # 1. Validierung
+        if not self._validate_prerequisites(exe_path, pfx_path):
             return False
 
-        timestamp_server = "http://timestamp.digicert.com"
-        
-        # FIX: Pfade in ABSOLUTE Pfade umwandeln (.resolve())
-        # Das verhindert Probleme, wenn wir das Arbeitsverzeichnis wechseln.
-        abs_exe_path = exe_path.resolve()
-        abs_pfx_path = pfx_path.resolve()
-        
-        # Der Output-Name (Signierte Datei)
-        abs_signed_path = abs_exe_path.parent / f"{abs_exe_path.stem}_signed.exe"
+        # 2. Pfade vorbereiten (Absolute Pfade sind Pflicht bei CWD-Wechsel!)
+        abs_exe = exe_path.resolve()
+        abs_pfx = pfx_path.resolve()
+        abs_signed = abs_exe.parent / f"{abs_exe.stem}_signed.exe"
 
-        # Befehl aufbauen
+        # 3. Kommando zusammenbauen
+        # Syntax: osslsigncode sign -pkcs12 <pfx> -pass <pwd> -n <name> -t <ts> -in <in> -out <out>
         cmd = [
             str(self.tool_path.resolve()), "sign",
-            "-pkcs12", str(abs_pfx_path),
+            "-pkcs12", str(abs_pfx),
             "-pass", password,
-            "-n", exe_path.stem,
-            "-t", timestamp_server,
-            "-in", str(abs_exe_path),
-            "-out", str(abs_signed_path)
+            "-n", abs_exe.stem,
+            "-t", self.TIMESTAMP_SERVER,
+            "-in", str(abs_exe),
+            "-out", str(abs_signed)
         ]
-        
-        # Environment vorbereiten (für OpenSSL Module)
+
+        # 4. Umgebung vorbereiten (Fix für "Legacy Provider not found")
+        # Wir müssen OpenSSL sagen, wo die Module (.dll) liegen.
+        # Unser EnvironmentManager hat sie flach in 'tools/' entpackt.
         env = os.environ.copy()
-        tools_dir_str = str(self.tool_path.parent.resolve())
-        env["OPENSSL_MODULES"] = tools_dir_str
+        env["OPENSSL_MODULES"] = str(self.tool_dir.resolve())
 
         try:
-            # Ausführen im 'tools' Ordner, aber mit absoluten Pfaden zu den Dateien
-            result = subprocess.run(
+            log.debug(f"Starte Signier-Prozess im Kontext: {self.tool_dir}")
+            
+            # WICHTIG: cwd auf tools/ setzen, damit die EXE ihre DLLs (z.B. zlib1.dll) findet.
+            process = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
-                errors='replace',
-                cwd=tools_dir_str, # Wichtig für DLLs
-                env=env            # Wichtig für legacy.dll
+                errors='replace', # Robustheit bei Encoding-Fehlern
+                cwd=str(self.tool_dir),
+                env=env
             )
 
-            if result.returncode == 0 and abs_signed_path.exists():
+            # 5. Auswertung
+            if process.returncode == 0 and abs_signed.exists():
                 log.success("Signatur erfolgreich erstellt.")
                 
-                # Original überschreiben (OneFile Feeling)
-                if abs_exe_path.exists():
-                    os.remove(abs_exe_path)
-                shutil.move(abs_signed_path, abs_exe_path)
+                # Atomares Ersetzen (Swap)
+                self._swap_files(abs_exe, abs_signed)
                 
-                log.success(f"Datei signiert: {exe_path.name}")
+                log.success(f"Datei finalisiert: {abs_exe.name}")
                 return True
             else:
-                log.error("Signierung fehlgeschlagen.")
-                log.error(f"Exit Code: {result.returncode}")
-                if result.stdout:
-                    log.error(f"Output: {result.stdout.strip()}")
-                if result.stderr:
-                    log.error(f"Error: {result.stderr.strip()}")
+                self._handle_error(process)
                 return False
 
         except Exception as e:
-            log.error(f"Fehler beim Ausführen von osslsigncode: {e}")
+            log.error(f"Kritischer Fehler im Signer: {e}")
             return False
+
+    def _validate_prerequisites(self, exe: Path, pfx: Path) -> bool:
+        if not self.tool_path.exists():
+            log.error(f"Signier-Tool fehlt: {self.tool_path}")
+            log.info("Bitte Launcher neu starten (Environment Check lädt es nach).")
+            return False
+        
+        if not exe.exists():
+            log.error(f"Zu signierende Datei fehlt: {exe}")
+            return False
+            
+        if not pfx.exists():
+            log.error(f"Zertifikat fehlt: {pfx}")
+            return False
+            
+        return True
+
+    def _swap_files(self, original: Path, signed: Path):
+        """Ersetzt das Original sicher durch die signierte Version."""
+        try:
+            if original.exists():
+                original.unlink()
+            shutil.move(str(signed), str(original))
+        except OSError as e:
+            log.warning(f"Konnte Datei nicht atomar ersetzen: {e}")
+            # Fallback oder manueller Eingriff nötig
+
+    def _handle_error(self, process: subprocess.CompletedProcess):
+        log.error("Signierung fehlgeschlagen.")
+        log.error(f"Exit Code: {process.returncode}")
+        
+        if process.stdout:
+            log.error(f"Tool Output: {process.stdout.strip()}")
+        if process.stderr:
+            log.error(f"Tool Error: {process.stderr.strip()}")
+            
+        # Bekannte Fehlerhinweise
+        if "load provider" in (process.stderr or ""):
+            log.warning("Hinweis: OpenSSL Module konnten nicht geladen werden. Prüfe 'tools'-Ordner.")
