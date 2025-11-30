@@ -1,118 +1,95 @@
-# exeFile Builder & Signer Framework
+# ExeFile Builder & Signer Framework (Enterprise Edition)
 
-Ein modulares, professionelles Framework zur Automatisierung des Build-Prozesses von Python zu Windows Executables (.exe). 
-Es kombiniert Dependency-Management, Zertifikatserstellung (Code Signing) und PyInstaller-Kapselung in einer robusten Pipeline.
+Ein professionelles, modulares Framework zur Automatisierung des Build-Prozesses von Python zu signierten Windows Executables (.exe). 
+Es kombiniert robustes Dependency-Management, Zertifikatserstellung (Code Signing) und PyInstaller-Kapselung in einer "Self-Healing" Pipeline.
 
 ## 🚀 Features
 
-* **Automatisches Environment Management:** * Erkennt `requirements.txt` oder `poetry` (pyproject.toml).
-    * Installiert fehlende Abhängigkeiten automatisch.
-    * **Smart Check:** Prüft, ob Pakete bereits existieren, um unnötige Installationen zu vermeiden.
-    * **Network Guard:** Wartet automatisch auf eine aktive Internetverbindung ("Ping Loop"), bevor Downloads starten.
-      
+* **Automatisches Environment Management:**
+    * Erstellt und verwaltet ein isoliertes Virtual Environment (`.venv`).
+    * **Self-Healing:** Lädt fehlende Tools (`osslsigncode`, `OpenSSL`) und Python-Pakete automatisch nach.
+    * **Network Guard:** Wartet bei Verbindungsabbrüchen automatisch auf das Internet ("Ping Loop").
 * **Zertifikats-Management:**
-    * Erstellt automatisch Self-Signed Code Signing Zertifikate (.pfx).
-    * Nutzt native PowerShell-Befehle (keine externe OpenSSL Abhängigkeit nötig).
-    * Generiert Installations-Scripte (`install_cert.bat`) für Endanwender.
-      
-* **Build Wrapper:**
-    * Abstrahiert PyInstaller Komplexität.
-    * Unterstützt OneFile, Console/NoConsole, Icons.
-      
+    * Erstellt automatisch Self-Signed Code Signing Zertifikate (RSA 4096 bit).
+    * Unterstützt den Import bestehender PFX-Dateien.
+    * Generiert `install_cert.bat` für die einfache Installation beim Endkunden.
+* **Build Modi:**
+    * **GUI-Modus:** Einfache Konfiguration per Klick für Standard-Skripte.
+    * **Config-Modus (Goldstandard):** Akzeptiert externe Python-Konfigurationsdateien (z.B. `build_windows_exe.py`) via Drag & Drop für komplexe Projekte mit spezifischen Import-Regeln.
 * **Signierung:**
-    * Signiert die fertige .exe via Authenticode.
+    * Signiert die fertige .exe nativ mit `osslsigncode` (kein PowerShell nötig).
     * Setzt Timestamp-Server für langfristige Gültigkeit.
-      
-* **GUI & CLI:**
-    * Verfügt über eine moderne Dark-Mode GUI (`main_gui.py`).
-    * Sowie einen CLI-Modus (`main.py`).
 
 ## 📂 Projektstruktur
 
 ```text
 .
-├── main.py                 # CLI Einstiegspunkt
+├── start_launcher.bat      # DER EINSTIEGSPUNKT (Doppelklick hier!)
+├── launcher.ps1            # Setup- & Start-Logik (PowerShell)
 ├── main_gui.py             # GUI Einstiegspunkt
-├── Requirements.txt        # Dependencies des Frameworks selbst
+├── Requirements.txt        # Definierte Versionen (PyYAML==6.0.3 etc.)
 ├── README.md
+├── CHANGELOG.md
 └── src
     ├── core
-    │   ├── builder.py      # PyInstaller Wrapper
-    │   ├── certs.py        # Zertifikats-Logik (PowerShell)
-    │   ├── environment.py  # Dependency Manager (Pip/Poetry)
+    │   ├── builder.py      # PyInstaller Wrapper (mit Config-Support)
+    │   ├── certs.py        # Zertifikats-Logik
+    │   ├── environment.py  # Dependency & Tool Manager
     │   ├── network.py      # Network Guard (Ping Loop)
-    │   ├── orchestrator.py # Hauptlogik / Pipeline Controller
-    │   └── signer.py       # Authenticode Signer
+    │   ├── orchestrator.py # Pipeline Controller
+    │   └── signer.py       # Binary Signer (osslsigncode)
     ├── ui
-    │   └── gui.py          # Tkinter GUI Implementierung
+    │   └── gui.py          # Tkinter GUI (Dark Mode)
     └── utils
-        └── helpers.py      # Logging und Hilfsfunktionen
-```
-🛠 Installation
-Repository klonen.
-
-Sicherstellen, dass Python 3.10+ installiert ist.
-
-Framework-Abhängigkeiten installieren:
-
-```Bash
-
-pip install -r Requirements.txt
+        └── logger.py       # Enterprise Logging
 
 ```
-(Hinweis: Das Framework kann fehlende Projektabhängigkeiten später selbst nachladen).
+* **🛠 Installation & Start**
 
-💻 Nutzung
-Option A: Grafische Oberfläche (GUI)
-Starten Sie das Tool bequem per Mausklick:
-```Bash
+Es ist keine manuelle Installation von Python oder Git erforderlich. Der Launcher übernimmt alles.
 
-python main_gui.py
-```
-Wählen Sie Script-Datei, Icon und Namen aus und klicken Sie auf "START BUILD & SIGN". Der Output wird direkt im Fenster angezeigt.
+* Repository klonen oder herunterladen.
 
-Option B: Kommandozeile (CLI)
-Für Server oder schnelle Builds:
-```Bash
+* Doppelklick auf start_launcher.bat.
 
-python main.py
-```
+* Zurücklehnen. Das Framework richtet sich selbst ein.
 
-### **🔑 Zertifikate & Trust**
+* **💻 Nutzung**
+  
+**Option A: Standard Build (Einfach)**
+* Für einfache Skripte ohne spezielle Anforderungen.
 
-Da wir selbst-signierte Zertifikate erstellen, vertraut Windows diesen standardmäßig nicht. 
-Das Framework erstellt im builds/-Ordner automatisch eine install_cert.bat. 
-Führen Sie diese einmalig als Administrator aus, um das Zertifikat in den "Trusted People" Store zu importieren. 
-Danach starten alle signierten Anwendungen ohne Warnung.
+* Ziehe dein Python-Script (.py) in das Feld "Start Script".
 
-📝 Lizenz
+* (Optional) Ziehe ein Icon (.ico) in das Icon-Feld.
+
+* Klicke auf "🚀 START BUILD & SIGN".
+
+**Option B: Config Build (Goldstandard / Profi)**
+* Für komplexe Projekte (wie llm_conversion_framework), die eine eigene Build-Konfiguration mitbringen.
+
+* Ziehe das Haupt-Script (z.B. orchestrator/main.py) in das Feld "Start Script".
+
+* Ziehe die Konfigurationsdatei des Projekts (z.B. scripts/build_windows_exe.py) in die Liste "Zusatz-Dateien & Ordner" (Assets).
+
+* Klicke auf "🚀 START BUILD & SIGN".
+
+* -> Das Framework erkennt die Konfiguration automatisch ("Smart Scan") und nutzt exakt die dort definierten Argumente (Hidden Imports, Pfade, etc.).
+
+* **🔑 Zertifikate & Weitergabe** 
+Das Framework erstellt im Ordner builds/dist/ ein komplettes Distributions-Paket.
+
+**Inhalt des Pakets:**
+
+* DeineApp.exe (Signiert)
+
+* DeinCert.cer (Öffentlicher Schlüssel)
+
+* install_cert.bat (Installations-Skript)
+
+* ANLEITUNG_LESEN.txt (Hilfe für den Nutzer)
+
+**Wichtig für Empfänger: Da wir selbst-signierte Zertifikate nutzen, muss der Empfänger einmalig die install_cert.bat als Administrator ausführen, damit Windows der Anwendung vertraut.**
+
+* **📝 Lizenz**
 MIT License - Copyright (c) 2025 Smilez1985
-
-
-### **JSON Memory Prompt**
-
-```json
-{
-  "timestamp": "2025-11-20T18:56:00",
-  "project_context": "Lokaler KI-Assistent & exeFile Builder Framework",
-  "decisions": [
-    {
-      "topic": "Framework Architektur",
-      "details": "Das exeFile Framework ist modular aufgebaut (Builder, Signer, Certs, Environment, Orchestrator). Es nutzt nun eine Tkinter GUI (Dark Mode) und hat robuste Netzwerk-Checks (Ping Loop) sowie intelligente Dependency-Checks implementiert."
-    },
-    {
-      "topic": "Environment Handling",
-      "details": "Die Klasse EnvironmentManager in src/core/environment.py wurde erweitert. Sie prüft nun vor pip-Aufrufen mittels importlib/pkg_resources, ob Pakete fehlen, und wartet mittels NetworkGuard aktiv auf eine Internetverbindung."
-    },
-    {
-      "topic": "GitHub Workflow",
-      "details": "User wurde instruiert, Ordner mittels 'git mv' zu verschieben, um die Historie zu wahren."
-    }
-  ],
-  "user_preferences": {
-    "language": "Deutsch",
-    "output_format": "Vollständige Dateien, keine Platzhalter",
-    "framework_style": "Wrapper-basiert, nativ (keine unnötigen 3rd Party Libs für GUI)"
-  },
-  "current_status": "GUI (main_gui.py) und README.md erstellt. Environment.py gehärtet. Framework ist vollständig einsatzbereit."
-}
