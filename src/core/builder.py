@@ -32,6 +32,8 @@ class PyBuilder:
 
     def _run_process(self, cmd: list, cwd: Path = None, app_name_hint: str = "Output") -> Path:
         """Führt den Prozess aus und gibt den Pfad zur EXE zurück."""
+        captured_logs = []  # Puffer für ALLE Ausgaben (für Fehlerdiagnose)
+
         try:
             # Logging für Debugging
             log.debug(f"CWD: {cwd or '.'}")
@@ -40,54 +42,64 @@ class PyBuilder:
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.STDOUT, # Wir leiten Fehler in den normalen Strom um
                 text=True,
                 encoding='utf-8',
                 cwd=str(cwd) if cwd else None
             )
 
-            # Echtzeit-Logging
+            # Echtzeit-Logging & Pufferung
             for line in process.stdout:
                 line = line.strip()
                 if line:
-                    if any(x in line for x in ["Error", "WARNING", "Building", "Copying"]):
+                    captured_logs.append(line) # Immer speichern!
+                    
+                    # Für den User filtern wir im Erfolgsfall, um Spam zu vermeiden
+                    if any(x in line for x in ["Error", "WARNING", "Building", "Copying", "Traceback"]):
                         log.debug(f"[PyInstaller] {line}")
 
             process.wait()
 
             if process.returncode == 0:
+                # ERFOLGSFALL
                 # Wir versuchen, den Namen der EXE zu erraten oder nutzen den Hint
-                # Im Config-Modus steht der Name in der Liste (--name), das parsen wir im Wrapper
                 exe_path = self.dist_dir / f"{app_name_hint}.exe"
                 
                 if exe_path.exists():
                     log.success(f"Build erfolgreich! Datei: {exe_path}")
                     return exe_path
                 else:
-                    log.error(f"PyInstaller fertig, aber Datei fehlt: {exe_path}")
-                    # Fallback: Manchmal heißt die Datei anders, wir listen das Verzeichnis
+                    log.error(f"PyInstaller lief durch, aber Datei fehlt: {exe_path}")
+                    # Fallback: Liste Verzeichnis
                     found = list(self.dist_dir.glob("*.exe"))
                     if found:
                         log.info(f"Gefundene Datei: {found[0]}")
                         return found[0]
                     return None
             else:
-                log.error(f"PyInstaller Fehler (Code {process.returncode})")
+                # FEHLERFALL: CRASH DUMP
+                log.error(f"PyInstaller abgebrochen (Exit Code {process.returncode})")
+                log.error("================ ERROR LOG START ================")
+                # Wir geben die letzten 50 Zeilen aus (meist reicht das), oder alles wenn kürzer
+                start_index = max(0, len(captured_logs) - 100)
+                for i in range(start_index, len(captured_logs)):
+                    # Wir nutzen print direkt oder log.error ohne Timestamp Prefix für Lesbarkeit
+                    print(f"    > {captured_logs[i]}")
+                log.error("================ ERROR LOG ENDE =================")
                 return None
 
         except Exception as e:
-            log.error(f"Kritischer Build-Fehler: {e}")
+            log.error(f"Kritischer System-Fehler im Builder: {e}")
             return None
 
     def build_with_config(self, pyinstaller_args: list, project_root: Path) -> Path:
         """
         GOLDSTANDARD: Führt PyInstaller mit der exakten Liste aus der Config-Datei aus.
-        
         Args:
             pyinstaller_args: Die Liste PYINSTALLER_CMD_ARGS aus der Datei.
             project_root: Das Root-Verzeichnis des externen Projekts (für relative Pfade).
         """
-        # App Name extrahieren (nur für den Dateinamen-Check am Ende)
+        # App Name extrahieren
         app_name = "App"
         if "--name" in pyinstaller_args:
             idx = pyinstaller_args.index("--name")
@@ -118,7 +130,7 @@ class PyBuilder:
         if clean:
             args.extend(["--clean", "--noconfirm"])
             
-        # Standard Hidden Imports für GUI-Nutzer
+        # Standard Hidden Imports
         args.extend(["--hidden-import=yaml", "--hidden-import=win32api", "--hidden-import=win32con"])
 
         if icon_path and icon_path.exists():
