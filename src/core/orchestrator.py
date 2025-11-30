@@ -3,152 +3,246 @@ import time
 import importlib.util
 import sys
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
 
-# Module
+# Framework Module
 from src.core.environment import EnvironmentManager
 from src.core.certs import CertificateManager
 from src.core.signer import AuthenticodeSigner
 from src.core.builder import PyBuilder
-from src.core.network import NetworkGuard
-from src.utils.helpers import log
+from src.utils.logger import log
 
 class BuildOrchestrator:
+    """
+    Enterprise Orchestrator.
+    
+    Steuert den gesamten Build-Lebenszyklus:
+    1. Environment Check (Tools & Deps)
+    2. Zertifikats-Management (Erstellung/Laden)
+    3. Build-Prozess (GUI-basiert oder Config-basiert)
+    4. Signierung (Authenticode)
+    5. Packaging (Distributions-Ordner mit Anleitung)
+    """
     
     def __init__(self):
         self.env_manager = EnvironmentManager()
+        # Pfad hartkodiert relativ zum Framework-Root, um Konsistenz zu sichern
         self.cert_manager = CertificateManager(cert_store_path=Path("certs_store"))
         self.signer = AuthenticodeSigner()
         self.builder = PyBuilder()
-        self.network = NetworkGuard()
         
-    def setup_environment(self, project_root: Path):
-        self.env_manager.prepare_environment(project_root)
+    def setup_environment(self, project_root: Path) -> bool:
+        """Bereitet die Build-Umgebung vor."""
+        return self.env_manager.prepare_environment(project_root)
 
-    def get_cert_tuple(self, config: dict) -> tuple[Path, Path]:
-        # (Zertifikatslogik unverändert)
+    def get_cert_tuple(self, config: dict) -> Tuple[Optional[Path], Optional[Path]]:
+        """
+        Ermittelt das zu verwendende Zertifikat (Private Key PFX + Public Key CER).
+        """
         mode = config.get("cert_mode", "auto")
         password = config.get("cert_password", "")
         
-        if mode == "file":
-            pfx = Path(config.get("pfx_path"))
-            if not pfx.exists(): raise FileNotFoundError("PFX fehlt")
-            cer = pfx.with_suffix(".cer")
-            return pfx, (cer if cer.exists() else None)
-        else:
-            name = config.get("cert_name", "MyCert")
-            pfx = self.cert_manager.store_path / f"{name}.pfx"
-            cer = self.cert_manager.store_path / f"{name}.cer"
-            if pfx.exists():
-                log.info(f"♻️ Zertifikat aus Cache: {name}")
-                return pfx, cer
-            log.info(f"✨ Erstelle Zertifikat: {name}")
-            return self.cert_manager.create_certificate(name, password, use_openssl=config.get("use_openssl", False))
-
-    def create_readme(self, output_dir: Path):
         try:
-            with open(output_dir / "ANLEITUNG_LESEN.txt", "w", encoding="utf-8") as f:
-                f.write("Bitte install_cert.bat als Administrator ausführen!\nDann Programm starten.")
-        except: pass
+            if mode == "file":
+                pfx_path = Path(config.get("pfx_path", ""))
+                if not pfx_path.exists():
+                    log.error(f"PFX Datei nicht gefunden: {pfx_path}")
+                    return None, None
+                
+                # Versuch, die .cer daneben zu finden (Best Effort)
+                cer_path = pfx_path.with_suffix(".cer")
+                if not cer_path.exists():
+                    log.warning("Keine .cer Datei neben der PFX gefunden. Auto-Install Script wird eingeschränkt sein.")
+                    return pfx_path, None
+                    
+                return pfx_path, cer_path
+            else:
+                # Auto-Mode: Cache oder Neu
+                name = config.get("cert_name", "MySelfSignedCert")
+                use_openssl = config.get("use_openssl", False)
+                
+                # Check Cache
+                pfx = self.cert_manager.store_path / f"{name}.pfx"
+                cer = self.cert_manager.store_path / f"{name}.cer"
+                
+                if pfx.exists() and cer.exists():
+                    log.info(f"♻️ Zertifikat aus Cache verwenden: {name}")
+                    return pfx, cer
+                
+                log.info(f"✨ Erstelle neues Zertifikat: {name}")
+                return self.cert_manager.create_certificate(name, password, use_openssl=use_openssl)
+                
+        except Exception as e:
+            log.error(f"Fehler im Zertifikats-Management: {e}")
+            return None, None
 
-    def detect_config_from_assets(self, assets: List[str]) -> Tuple[List[str], Path, str]:
+    def create_distribution_package(self, exe_path: Path, pfx_name: str, cer_path: Optional[Path]):
         """
-        Sucht in den vom User bereitgestellten Assets nach einer Config-Datei.
+        Erstellt das finale Paket für den Endanwender.
+        Enthält: Signierte EXE, Public Key, Install-Script, Anleitung.
+        """
+        dist_dir = exe_path.parent
+        log.info("📦 Schnüre Distributions-Paket...")
+
+        # 1. Public Key kopieren
+        final_cer_path = None
+        if cer_path and cer_path.exists():
+            try:
+                final_cer_path = dist_dir / cer_path.name
+                shutil.copy(cer_path, final_cer_path)
+                log.debug(f"Public Key kopiert: {final_cer_path.name}")
+            except OSError as e:
+                log.warning(f"Konnte CER nicht kopieren: {e}")
+
+        # 2. Install-Script generieren
+        if final_cer_path:
+            self.cert_manager.create_install_script(dist_dir, pfx_name, final_cer_path)
+
+        # 3. Readme erstellen
+        self._write_readme(dist_dir)
+
+        log.success("✅ BUILD & SIGN SUCCESSFUL!")
+        log.info(f"Ausgabe-Verzeichnis: {dist_dir.absolute()}")
+        print("\n[INHALT DES PAKETS]")
+        print(f" - {exe_path.name} (Anwendung)")
+        if final_cer_path:
+            print(f" - {final_cer_path.name} (Zertifikat)")
+            print(f" - install_cert.bat (Setup)")
+            print(f" - ANLEITUNG_LESEN.txt")
+        print("-" * 40)
+
+    def _write_readme(self, output_dir: Path):
+        readme_path = output_dir / "ANLEITUNG_LESEN.txt"
+        content = """========================================================================
+             WICHTIGE INSTALLATIONS-HINWEISE
+========================================================================
+
+Damit dieses Programm auf Ihrem Computer ohne Warnmeldungen läuft, 
+muss einmalig das beiliegende Sicherheitszertifikat installiert werden.
+
+SCHRITT 1: ZERTIFIKAT INSTALLIEREN
+----------------------------------
+1. Finden Sie in diesem Ordner die Datei "install_cert.bat".
+2. Klicken Sie mit der RECHTEN Maustaste darauf.
+3. Wählen Sie "Als Administrator ausführen".
+4. Bestätigen Sie eventuelle Fenster mit "Ja" oder "OK".
+
+-> Es erscheint kurz ein schwarzes Fenster, das den Erfolg bestätigt.
+
+
+SCHRITT 2: PROGRAMM STARTEN
+---------------------------
+Jetzt können Sie das Programm (die .exe Datei mit dem Icon) 
+ganz normal mit einem Doppelklick starten.
+
+Viel Spaß!
+"""
+        try:
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except OSError:
+            pass
+
+    def detect_config_from_assets(self, assets: List[str]) -> Tuple[List[str], Path, Optional[str]]:
+        """
+        Analysiert Assets auf Python-Konfigurationsdateien (Goldstandard).
         Rückgabe: (Argumente, ProjectRoot, ConfigFilePath)
         """
         for asset_path in assets:
             path_obj = Path(asset_path)
             
-            # Wir suchen nur nach .py Dateien in der Asset-Liste
+            # Nur existierende .py Dateien prüfen
             if not path_obj.exists() or path_obj.suffix.lower() != ".py":
                 continue
             
             try:
-                # Schnell-Check: Enthält die Datei unser Keyword?
+                # 1. Quick Scan (Textsuche) für Performance
                 with open(path_obj, "r", encoding="utf-8", errors="ignore") as f:
                     if "PYINSTALLER_CMD_ARGS" not in f.read():
                         continue
                 
-                log.info(f"🔧 Build-Config in Assets erkannt: {path_obj.name}")
+                log.info(f"🔧 Build-Config erkannt: {path_obj.name}")
                 
-                # Importieren
-                spec = importlib.util.spec_from_file_location("asset_config", str(path_obj))
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                
-                if hasattr(mod, "PYINSTALLER_CMD_ARGS"):
-                    args = getattr(mod, "PYINSTALLER_CMD_ARGS")
+                # 2. Dynamischer Import
+                spec = importlib.util.spec_from_file_location("dynamic_build_config", str(path_obj))
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
                     
-                    # Root ermitteln: Wenn die Datei in 'scripts' liegt, ist Root eins drüber.
-                    # Sonst ist Root der Ordner der Datei.
-                    project_root = path_obj.parent
-                    if project_root.name in ["scripts", "config"]:
-                        project_root = project_root.parent
+                    if hasattr(mod, "PYINSTALLER_CMD_ARGS"):
+                        args = getattr(mod, "PYINSTALLER_CMD_ARGS")
                         
-                    log.success(f"✅ Konfiguration geladen! Root: {project_root}")
-                    return args, project_root, str(path_obj)
-                    
+                        # Root-Erkennung: Wenn Datei in 'scripts'/'config', ist Root ../
+                        project_root = path_obj.parent
+                        if project_root.name.lower() in ["scripts", "config", "configs"]:
+                            project_root = project_root.parent
+                            
+                        log.success(f"✅ Konfiguration geladen! Projekt-Root: {project_root}")
+                        return args, project_root, str(path_obj)
+                        
             except Exception as e:
-                log.warning(f"Konnte Asset {path_obj.name} nicht als Config laden: {e}")
+                log.warning(f"Konnte Asset {path_obj.name} nicht verarbeiten: {e}")
                 continue
         
-        return [], None, None
+        return [], Path("."), None
 
     def run_full_pipeline(self, config: dict):
+        """Hauptmethode: Führt den kompletten Prozess aus."""
         log.info("=== START PIPELINE ===")
         
-        script_input = Path(config.get("script_file"))
+        # 1. Basis-Validierung
+        script_input = Path(config.get("script_file", ""))
         if not script_input.exists():
-            log.error("Script nicht gefunden")
+            log.error("Haupt-Script nicht gefunden.")
             return
 
-        self.setup_environment(Path("."))
-
-        try:
-            pfx_path, cer_path = self.get_cert_tuple(config)
-            cert_pass = config.get("cert_password", "")
-        except Exception as e:
-            log.error(f"Cert Fehler: {e}")
+        # 2. Environment (Tools laden)
+        if not self.setup_environment(Path(".")):
+            log.error("Environment Setup fehlgeschlagen.")
             return
 
-        # --- LOGIK: CONFIG vs GUI ---
-        # Wir schauen in die Assets, die der User in die GUI gezogen hat
-        gui_assets = config.get("assets", [])
+        # 3. Zertifikate
+        pfx_path, cer_path = self.get_cert_tuple(config)
+        if not pfx_path:
+            return # Fehler wurde bereits geloggt
         
-        config_args, project_root, config_file = self.detect_config_from_assets(gui_assets)
+        cert_pass = config.get("cert_password", "")
+
+        # 4. Build-Strategie wählen (Config vs. GUI)
+        gui_assets = config.get("assets", [])
+        config_args, project_root, config_file_path = self.detect_config_from_assets(gui_assets)
         
         exe_path = None
         
         if config_args:
-            # MODUS A: Config (Goldstandard)
+            # --- STRATEGIE A: Goldstandard (Config) ---
             log.info("Starte Build mit externer Konfiguration...")
             
-            # Falls der User NOCH MEHR Assets in der GUI hat (außer der Config), 
-            # fügen wir diese sicherheitshalber auch hinzu.
+            # Alle Assets außer der Config selbst hinzufügen
             extra_assets = []
             for item in gui_assets:
-                if item == config_file: continue # Config selbst nicht packen
+                if item == config_file_path: continue
                 
                 p = Path(item)
                 if p.is_file(): extra_assets.append(f"--add-data={item};.")
                 elif p.is_dir(): extra_assets.append(f"--add-data={item};{p.name}")
             
             if extra_assets:
-                log.info(f"Füge {len(extra_assets)} weitere Assets aus der GUI hinzu.")
+                log.info(f"Füge {len(extra_assets)} manuelle Assets hinzu.")
                 config_args.extend(extra_assets)
 
-            # FIX: Korrekter Methodenname 'build_with_config'
             exe_path = self.builder.build_with_config(config_args, project_root)
             
         else:
-            # MODUS B: Standard GUI
-            log.info("Keine Config-Datei in den Assets gefunden. Nutze Standard-Modus.")
+            # --- STRATEGIE B: GUI Fallback ---
+            log.info("Keine externe Config gefunden. Nutze Standard-GUI-Modus.")
             
+            # Assets formatieren
             clean_assets = []
             for item in gui_assets:
                 p = Path(item)
-                if p.is_file(): clean_assets.append(f"{item};.")
-                elif p.is_dir(): clean_assets.append(f"{item};{p.name}")
+                if p.is_file(): clean_assets.append(f"--add-data={item};.")
+                elif p.is_dir(): clean_assets.append(f"--add-data={item};{p.name}")
 
             exe_path = self.builder.build_from_gui(
                 script_path=script_input,
@@ -159,21 +253,19 @@ class BuildOrchestrator:
                 add_data=clean_assets
             )
 
-        if not exe_path: return
+        if not exe_path:
+            return
 
-        # SIGNIERUNG
-        log.info("Warte auf Dateisystem...")
-        time.sleep(2)
+        # 5. Signierung
+        log.info("Initialisiere Signierung (Warte auf Dateisystem)...")
+        time.sleep(2) # Anti-Virus/Lock-Schutz
         
         if self.signer.sign_exe(exe_path, pfx_path, cert_pass):
-            dist = exe_path.parent
-            if cer_path:
-                try: shutil.copy(cer_path, dist / cer_path.name)
-                except: pass
-                self.cert_manager.create_install_script(dist, pfx_path.stem, cer_path)
-            self.create_readme(dist)
-            
-            log.success("✅ DONE! Fertiges Paket in:")
-            print(f" -> {dist.absolute()}")
+            # 6. Distribution erstellen
+            self.create_distribution_package(
+                exe_path=exe_path,
+                pfx_name=pfx_path.stem,
+                cer_path=cer_path
+            )
         else:
-            log.error("Signatur fehlgeschlagen.")
+            log.error("Signierung fehlgeschlagen. Build ist unvollständig.")
