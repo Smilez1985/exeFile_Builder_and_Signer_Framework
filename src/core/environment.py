@@ -1,136 +1,189 @@
 import subprocess
 import sys
 import shutil
-import importlib.util
-import pkg_resources
 import zipfile
-import io
 import os
-import requests
+import importlib.util
 from pathlib import Path
-from src.utils.helpers import log
+from typing import List, Optional
+
+from src.utils.logger import log
 from src.core.network import NetworkGuard
 
 class EnvironmentManager:
     """
-    Kümmert sich um die Vorbereitung der Build-Umgebung.
-    Managed Python-Dependencies, OpenSSL und Signing-Tools.
+    Enterprise Environment Manager.
+    Verantwortlich für:
+    - Sicherstellung der Build-Tools (OpenSSL, osslsigncode)
+    - Management der Python-Dependencies (pip/poetry)
+    - Validierung der Laufzeitumgebung (VENV)
     """
     
+    # Konstanten für externe Tools
+    OSSLSIGNCODE_URL = "https://github.com/mtrojnar/osslsigncode/releases/download/2.10/osslsigncode-2.10-windows-x64-mingw.zip"
+    # Optional: SHA256 Hash für maximale Sicherheit (hier als Platzhalter)
+    OSSLSIGNCODE_HASH = None 
+
     def __init__(self):
         self.network = NetworkGuard()
         self.tools_dir = Path("tools")
-        self.tools_dir.mkdir(exist_ok=True)
+        self.tools_dir.mkdir(parents=True, exist_ok=True)
 
-    def prepare_environment(self, project_path: Path):
-        log.info(f"Analysiere Umgebung in: {project_path}")
-        
-        # 1. System Tools (OpenSSL & OSSLSIGNCODE)
-        self._ensure_openssl()
-        self._ensure_osslsigncode()
-
-        # 2. Python Check
-        if self._is_venv():
-            log.debug("Aktives Virtual Environment (VENV) erkannt.")
-        else:
-            log.warning("ACHTUNG: Kein aktives VENV erkannt. Installation erfolgt global.")
-
-        # 3. Dependencies
-        if (project_path / "Requirements.txt").exists():
-            self._install_pip(project_path / "Requirements.txt")
-
-    def _ensure_osslsigncode(self):
-        """Lädt osslsigncode und ALLE Abhängigkeiten (DLLs) herunter."""
-        exe_path = self.tools_dir / "osslsigncode.exe"
-        
-        # Check: Existiert die Exe und ist sie größer als 0 Byte?
-        if exe_path.exists() and exe_path.stat().st_size > 0:
-            log.debug("Signier-Tool (osslsigncode) scheint vorhanden zu sein.")
-            return
-
-        log.warning("Signier-Tool (osslsigncode) fehlt oder ist beschädigt. Starte Download...")
-        self.network.wait_for_network()
-
-        # Offizieller Link zu Release 2.10 (MinGW Build mit DLLs)
-        url = "https://github.com/mtrojnar/osslsigncode/releases/download/2.10/osslsigncode-2.10-windows-x64-mingw.zip"
+    def prepare_environment(self, project_path: Path) -> bool:
+        """
+        Hauptmethode: Bereitet die gesamte Umgebung vor.
+        Gibt True zurück, wenn alles bereit ist.
+        """
+        log.info(f"Initialisiere Umgebung in: {project_path}")
         
         try:
-            log.info("Lade osslsigncode herunter...")
-            r = requests.get(url)
-            r.raise_for_status()
+            # 1. System Tools prüfen & laden
+            if not self._ensure_system_tools():
+                log.error("System-Tools konnten nicht bereitgestellt werden.")
+                return False
+
+            # 2. Python Umgebung prüfen
+            if not self._check_venv():
+                # Wir warnen nur, da der Launcher das VENV normalerweise erzwingt.
+                # In einer strikten Enterprise-Umgebung würden wir hier abbrechen.
+                log.warning("Kritisch: Skript läuft nicht in einem Virtual Environment!")
+
+            # 3. Dependencies installieren
+            self._install_dependencies(project_path)
             
-            log.info("Entpacke Tool und DLLs...")
-            found_exe = False
-            
-            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            return True
+
+        except Exception as e:
+            log.error(f"Environment-Fehler: {e}")
+            return False
+
+    def _ensure_system_tools(self) -> bool:
+        """Prüft und lädt notwendige Binaries (OpenSSL, osslsigncode)."""
+        
+        # A) OpenSSL Check
+        if not shutil.which("openssl"):
+            log.warning("OpenSSL nicht im PATH gefunden. Versuche Installation via Winget...")
+            if not self._install_openssl_via_winget():
+                log.error("OpenSSL fehlt. Bitte manuell installieren.")
+                return False
+        else:
+            log.debug("OpenSSL ist verfügbar.")
+
+        # B) Osslsigncode Check (Lokal im tools/ Ordner)
+        ossl_exe = self.tools_dir / "osslsigncode.exe"
+        
+        # Validierung: Existiert Datei und ist sie größer als 0 Bytes?
+        if ossl_exe.exists() and ossl_exe.stat().st_size > 0:
+            log.debug("Signier-Tool (osslsigncode) ist bereit.")
+            return True
+
+        # Download Starten
+        log.info("Lade Signier-Tool (osslsigncode) herunter...")
+        zip_path = self.tools_dir / "tool_download.zip"
+        
+        # Robuster Download via NetworkGuard
+        if self.network.download_file(self.OSSLSIGNCODE_URL, zip_path, self.OSSLSIGNCODE_HASH):
+            # Entpacken
+            return self._extract_tools(zip_path)
+        else:
+            log.error("Download des Signier-Tools fehlgeschlagen.")
+            return False
+
+    def _extract_tools(self, zip_path: Path) -> bool:
+        """Entpackt die Tools flach in das tools-Verzeichnis."""
+        try:
+            log.info("Entpacke Tools...")
+            with zipfile.ZipFile(zip_path, 'r') as z:
                 for file_info in z.infolist():
-                    # Wir ignorieren Ordner, wir wollen die Dateien direkt in 'tools/' haben (Flatten)
                     if file_info.is_dir():
                         continue
-                        
-                    filename = os.path.basename(file_info.filename)
-                    if not filename:
-                        continue
                     
-                    # Wir brauchen die .exe UND alle .dll Dateien (Abhängigkeiten)
+                    filename = os.path.basename(file_info.filename)
+                    # Wir brauchen die EXE und alle DLLs
                     if filename.lower().endswith(('.exe', '.dll')):
-                        target_path = self.tools_dir / filename
-                        with z.open(file_info) as source, open(target_path, "wb") as target:
-                            shutil.copyfileobj(source, target)
-                        
-                        if filename == "osslsigncode.exe":
-                            found_exe = True
-                            log.debug(f"Entpackt: {filename}")
-
-            if found_exe and exe_path.exists():
-                log.success(f"Signier-Tool installiert in: {self.tools_dir}")
+                        target = self.tools_dir / filename
+                        with z.open(file_info) as source, open(target, "wb") as dest:
+                            shutil.copyfileobj(source, dest)
+            
+            # Cleanup Zip
+            zip_path.unlink()
+            
+            if (self.tools_dir / "osslsigncode.exe").exists():
+                log.success(f"Tools installiert in: {self.tools_dir.absolute()}")
+                return True
             else:
-                raise FileNotFoundError("osslsigncode.exe war nicht im ZIP enthalten!")
-                
+                log.error("osslsigncode.exe war nicht im Archiv enthalten!")
+                return False
+
         except Exception as e:
-            log.error(f"Download/Entpacken fehlgeschlagen: {e}")
-            # Aufräumen bei Fehler
-            if exe_path.exists():
-                exe_path.unlink()
-            
-    def _ensure_openssl(self):
-        if shutil.which("openssl"):
-            log.debug("OpenSSL ist verfügbar.")
-            return
-            
-        log.warning("OpenSSL fehlt. Versuche Installation via Winget...")
+            log.error(f"Fehler beim Entpacken: {e}")
+            return False
+
+    def _install_openssl_via_winget(self) -> bool:
+        """Versucht OpenSSL via Windows Package Manager zu installieren."""
         self.network.wait_for_network()
         try:
-            cmd = ["powershell", "-Command", "winget install -e --id ShiningLight.OpenSSL --accept-source-agreements --accept-package-agreements --silent"]
-            subprocess.run(cmd, check=True)
-            log.success("OpenSSL Installation angestoßen.")
-        except Exception as e:
-            log.error(f"OpenSSL Install fehlgeschlagen: {e}")
+            cmd = [
+                "powershell", 
+                "-Command", 
+                "winget install -e --id ShiningLight.OpenSSL --accept-source-agreements --accept-package-agreements --silent"
+            ]
+            log.info("Starte Winget Installation für OpenSSL...")
+            # Timeout von 5 Minuten für Installation
+            subprocess.run(cmd, check=True, timeout=300, capture_output=True)
+            log.success("OpenSSL Installation angestoßen (Neustart ggf. erforderlich).")
+            return True
+        except subprocess.TimeoutExpired:
+            log.error("Timeout bei OpenSSL Installation.")
+            return False
+        except subprocess.CalledProcessError as e:
+            log.warning(f"Winget Installation fehlgeschlagen (Code {e.returncode}).")
+            return False
 
-    def _is_venv(self) -> bool:
-        return (hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+    def _check_venv(self) -> bool:
+        """Prüft strikt auf aktives VENV."""
+        is_venv = (hasattr(sys, 'real_prefix') or
+                   (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+        return is_venv
 
-    def _check_package_installed(self, package_name: str) -> bool:
-        clean_name = package_name.split('==')[0].split('>=')[0].split('<=')[0].strip()
-        if importlib.util.find_spec(clean_name) is not None: return True
-        try: pkg_resources.get_distribution(clean_name); return True
-        except: return False
+    def _install_dependencies(self, project_path: Path):
+        """Installiert Python Dependencies (requirements.txt)."""
+        req_file = project_path / "Requirements.txt"
+        
+        if not req_file.exists():
+            return
 
-    def _install_pip(self, req_file: Path):
         log.info("Prüfe Python Dependencies...")
-        to_install = []
+        
+        # Smart Check: Müssen wir überhaupt installieren?
+        if self._are_requirements_met(req_file):
+            log.success("Dependencies sind bereits aktuell.")
+            return
+
+        self.network.wait_for_network()
+        
+        try:
+            cmd = [sys.executable, "-m", "pip", "install", "-r", str(req_file), "--disable-pip-version-check"]
+            subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            log.success("Dependencies erfolgreich installiert.")
+        except subprocess.CalledProcessError as e:
+            log.error(f"Pip Install fehlgeschlagen: {e}")
+            raise
+
+    def _are_requirements_met(self, req_file: Path) -> bool:
+        """Prüft, ob Pakete fehlen, ohne pip aufzurufen (schneller)."""
         try:
             with open(req_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#') and not self._check_package_installed(line):
-                        to_install.append(line)
-        except: pass
-
-        if not to_install:
-            log.success("Dependencies aktuell.")
-            return
-
-        log.info(f"Installiere {len(to_install)} Pakete...")
-        self.network.wait_for_network()
-        subprocess.check_call([sys.executable, "-m", "pip", "install"] + to_install)
+                requirements = [
+                    line.strip() for line in f 
+                    if line.strip() and not line.startswith('#')
+                ]
+            
+            for req in requirements:
+                # Einfacher Namens-Check (ignoriert Versionen für Speed, außer == ist dabei)
+                pkg_name = req.split('==')[0].split('>=')[0].strip()
+                if not importlib.util.find_spec(pkg_name):
+                    return False
+            return True
+        except Exception:
+            return False # Im Zweifel neu installieren
